@@ -1,0 +1,21 @@
+You are a senior RTL design engineer. The Verilog code below has syntax or compilation errors reported by Icarus Verilog (iverilog). Fix ALL errors and return the corrected, complete module.
+
+## Errors (from iverilog)
+
+```
+{{iverilog_errors}}
+```
+
+## Current Verilog Code
+
+```verilog
+{{verilog_code}}
+```
+
+## Requirements
+
+1. Fix ALL errors reported above
+2. Keep all existing correct logic unchanged — only fix what is broken
+3. Output the COMPLETE fixed module (module ... endmodule)
+4. Common fixes: undeclared signals → add wire/reg; width mismatches → fix widths; missing semicolons → add them; wrong port order → reorder to match declaration
+5. Respond ONLY with the Verilog code in a markdown code fence. No explanations.

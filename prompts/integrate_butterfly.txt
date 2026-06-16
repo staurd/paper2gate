@@ -1,0 +1,86 @@
+You are a senior RTL design engineer specializing in NTT butterfly hardware for post-quantum cryptography. Your task is to generate a complete, synthesizable NTT butterfly top-level module that integrates the paper's innovative sub-module(s) with standard butterfly components.
+
+## Standard Butterfly Architecture
+
+The NTT butterfly for Kyber (q=3329, DATA_WIDTH=12) performs these operations:
+
+**Cooley-Tukey (CT):**
+```
+a_out = (a_in + b_in * w)  mod q
+b_out = (a_in - b_in * w)  mod q
+```
+
+**Gentleman-Sande (GS):**
+```
+a_out = (a_in + b_in) * w  mod q
+b_out = (a_in - b_in) * w  mod q
+```
+
+Where `w` is a twiddle factor (constant for a given NTT stage).
+
+## Standard Sub-Modules You Must Generate
+
+In addition to the paper's innovative module, the butterfly needs these standard components:
+
+1. **mod_adder**: Combinational modular addition. `r = (a + b) mod q`. Use a simple unsigned add + conditional subtract if `(a + b) >= q`. Ports: `input [11:0] a, b; output [11:0] r`.
+
+2. **mod_subtractor**: Combinational modular subtraction. `r = (a - b) mod q`. Use unsigned subtract + conditional add of q if underflow. Ports: `input [11:0] a, b; output [11:0] r`.
+
+## Paper's Innovative Module(s)
+
+The following innovative module(s) were extracted from the paper and already generated. Instantiate them in the butterfly.
+
+{% for mod in innovations %}
+### {{mod.module_name}} ({{mod.category}})
+Summary: {{mod.summary}}
+
+Ports:
+{% for p in mod.hardware_spec.ports.input %}
+  input {{p.name}} [{{p.width}}]
+{% endfor %}
+{% for p in mod.hardware_spec.ports.output %}
+  output {{p.name}} [{{p.width}}]
+{% endfor %}
+{% endfor %}
+
+## Top-Level Module Specification
+
+**Module Name**: `butterfly_top`
+
+**Parameters**: `DATA_WIDTH = 12`, `Q = 3329`
+
+**Ports**:
+| Name | Width | Direction | Description |
+|------|-------|-----------|-------------|
+| clk | 1 | input | Clock |
+| rst_n | 1 | input | Active-low synchronous reset |
+| a_in | DATA_WIDTH | input | First butterfly operand |
+| b_in | DATA_WIDTH | input | Second butterfly operand |
+| w | DATA_WIDTH | input | Twiddle factor |
+| a_out | DATA_WIDTH | output | First butterfly result |
+| b_out | DATA_WIDTH | output | Second butterfly result |
+| valid_out | 1 | output | High when results are valid |
+
+## Requirements
+
+1. Generate ALL modules in ONE file, with the top-level module first:
+   - `butterfly_top` (instantiates all sub-modules, wires them together)
+   - `mod_adder` (standard modular addition)
+   - `mod_subtractor` (standard modular subtraction)
+   - Do NOT regenerate the paper's innovative module — use its existing interface
+
+2. The butterfly_top must:
+   - Instantiate the paper's innovative module for the multiplication step
+   - Instantiate mod_adder and mod_subtractor for addition/subtraction
+   - Include pipeline registers at inputs/outputs for clean timing
+   - Generate a valid_out signal that accounts for any latency in the innovative module
+
+3. All modules must be synthesizable RTL (no initial/forever/$finish).
+
+4. Use parameter declarations for DATA_WIDTH and Q throughout.
+
+5. Add clear comments showing which sub-module is the paper's innovation.
+
+## Output
+
+Return ONLY the Verilog code in a markdown code fence. No explanations.

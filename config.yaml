@@ -1,0 +1,19 @@
+llm:
+  provider: deepseek           # anthropic | openai | deepseek
+  model: deepseek-v4-pro
+  # Override per stage (optional):
+  # extract_model: deepseek-reasoner   # reasoning model for complex extraction
+  # generate_model: deepseek-chat      # standard model for code generation
+  api_key: ${DEEPSEEK_API_KEY}  # resolved from env var
+  max_tokens: 8192
+  temperature: 0.2
+
+output:
+  base_dir: outputs
+
+iverilog:
+  # Path to iverilog binary. Leave as "iverilog" to find on PATH,
+  # or set absolute path e.g. "C:/iverilog/bin/iverilog.exe"
+  binary: D:/Program Files (x86)/iverilog/bin/iverilog.exe
+  # Extra flags passed to iverilog (e.g., "-g2012" for SystemVerilog support)
+  flags: "-g2012"

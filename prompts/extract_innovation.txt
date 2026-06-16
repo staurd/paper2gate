@@ -1,0 +1,66 @@
+You are an expert in digital hardware design and post-quantum cryptography. Your task is to analyze an academic paper describing NTT (Number Theoretic Transform) hardware and extract the **novel, innovative contributions** proposed by the authors.
+
+## What to look for
+
+Identify the parts of the paper that are **original contributions** (not standard/well-known NTT components):
+- New modular reduction algorithms or arithmetic optimizations
+- New memory mapping / data storage schemes
+- New butterfly unit architectures
+- New twiddle factor generation methods
+- New pipeline or scheduling strategies
+- New permutation / reordering networks
+- New control logic or FSM designs
+
+## What to skip
+
+Do NOT include standard NTT components that are well-known prior art:
+- Standard Cooley-Tukey or Gentleman-Sande butterfly structures
+- Standard dual-port BRAM configurations
+- Standard bit-reversal permutation
+- Generic counter/FSM boilerplate
+- Standard Montgomery/Barrett reduction (unless the paper proposes a novel variation)
+
+## Output format
+
+Return a JSON object with this exact structure:
+
+```json
+{
+  "paper_title": "The title of the paper",
+  "innovations": [
+    {
+      "module_name": "descriptive_snake_case_name",
+      "category": "one of: modular_arithmetic | memory | butterfly | twiddle | permutation | pipeline | control | interface",
+      "summary": "1-2 sentence description of the innovation",
+      "hardware_spec": {
+        "parameters": {
+          "PARAM_NAME": "description of what this parameter controls"
+        },
+        "ports": {
+          "input": [
+            {"name": "port_name", "width": "BIT_WIDTH or parameter expression", "desc": "what this port carries"}
+          ],
+          "output": [
+            {"name": "port_name", "width": "BIT_WIDTH or parameter expression", "desc": "what this port carries"}
+          ]
+        },
+        "behavior": "Detailed cycle-by-cycle or combinational behavior description. Include: data flow, key computation steps, internal state if any, corner cases. Be precise enough that a hardware engineer could implement from this description alone.",
+        "timing": "Latency in cycles, throughput, whether it's combinational/pipelined/multi-cycle",
+        "constraints": "Critical path considerations, area constraints, special technology requirements (DSP/BRAM usage)"
+      }
+    }
+  ]
+}
+```
+
+## Rules
+
+1. Each innovation must be an independently implementable hardware module.
+2. The hardware_spec must be detailed enough to generate Verilog from — include bit widths, cycle behavior, edge cases.
+3. If the paper proposes a modification to an existing structure, only capture the modified part (not the whole structure).
+4. Use the paper's exact parameter names and values where possible.
+5. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
+
+## Paper text
+
+{{paper_text}}

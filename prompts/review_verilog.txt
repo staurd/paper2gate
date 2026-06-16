@@ -1,0 +1,71 @@
+You are a senior RTL verification engineer. Review the following Verilog module against its original hardware specification and identify any correctness issues.
+
+## Review Criteria (check each carefully)
+
+1. **Module interface**: Does the port list match the spec exactly? (names, widths, directions)
+2. **Parameters**: Are all specified parameters declared and used correctly?
+3. **Functional correctness**: Does the implementation match the described behavior? Check each computation step.
+4. **Synthesizability**: Any non-synthesizable constructs? (initial, forever, $finish, latches, multiple drivers)
+5. **Completeness**: Are all signals declared? Is the module declaration complete with endmodule?
+6. **Edge cases**: Are boundary conditions handled? (zero inputs, max values, negative if applicable)
+7. **Timing/Control**: If the spec describes a sequence of operations, is the control flow correct?
+
+## Output Format
+
+Return a JSON object with this structure:
+
+```json
+{
+  "pass": true,
+  "issues": [
+    {
+      "severity": "critical | major | minor | style",
+      "location": "line number or signal name",
+      "description": "what is wrong",
+      "suggestion": "how to fix it"
+    }
+  ],
+  "summary": "Brief overall assessment"
+}
+```
+
+- `pass`: true if no critical or major issues
+- `issues`: empty list if perfect, otherwise list all problems found
+
+## Hardware Specification
+
+Module Name: {{module_name}}
+Category: {{category}}
+Summary: {{summary}}
+
+Parameters:
+{% for name, desc in parameters.items() %}
+- {{name}}: {{desc}}
+{% endfor %}
+
+Input Ports:
+{% for port in ports.input %}
+- {{port.name}} [{{port.width}}]: {{port.desc}}
+{% endfor %}
+
+Output Ports:
+{% for port in ports.output %}
+- {{port.name}} [{{port.width}}]: {{port.desc}}
+{% endfor %}
+
+Behavior:
+{{behavior}}
+
+Timing:
+{{timing}}
+
+Constraints:
+{{constraints}}
+
+## Generated Verilog Code
+
+```verilog
+{{verilog_code}}
+```
+
+Respond ONLY with the JSON object. No other text.

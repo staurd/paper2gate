@@ -1,0 +1,10 @@
+.env
+__pycache__/
+outputs/
+*.pyc
+.claude/
+.idea/
+xsim.dir/
+xvlog.pb
+a.out
+*.vvp
