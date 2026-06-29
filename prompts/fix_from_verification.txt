@@ -1,0 +1,22 @@
+You are a senior RTL design engineer. The Verilog module below has been tested against a Python golden model and produced WRONG outputs. The testbench ran random inputs and compared the results against correct modular arithmetic. Fix the implementation so that it computes the correct results.
+
+## Failed Tests
+
+```
+{{failure_details}}
+```
+
+## Current Verilog Code
+
+```verilog
+{{verilog_code}}
+```
+
+## Instructions
+
+1. Analyze each failure: look at the input values, the expected output, and the actual (wrong) output
+2. Find the root cause in the Verilog implementation — is it an arithmetic error, a sign/unsigned issue, a bit-width problem, or incorrect algorithm logic?
+3. Fix the implementation so ALL test cases produce the correct output
+4. Output the COMPLETE fixed module (module ... endmodule)
+5. Keep the same module name, port names, and parameters
+6. Respond ONLY with the Verilog code inside a markdown code fence. No explanations.

@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from src.code_generator import (
+    fix_from_verification,
     generate_verilog,
     generate_with_check,
     save_error_logs,
@@ -20,6 +21,7 @@ from src.innovation_extractor import extract_innovations, save_specs
 from src.integration_generator import generate_butterfly, save_butterfly
 from src.llm_client import LLMClient
 from src.pdf_parser import extract_text
+from src.verification_runner import verify_module
 
 console = Console()
 
@@ -41,6 +43,7 @@ def run_pipeline(
     dry_run: bool = False,
     use_review: bool = True,
     use_integrate: bool = True,
+    use_verify: bool = True,
 ) -> Path:
     """Run the full paper-to-Verilog pipeline."""
     project_root = Path(__file__).parent.parent
@@ -99,6 +102,7 @@ def run_pipeline(
     verilog_dir = out_dir / "verilog"
     review_dir = out_dir / "review_reports"
     verilog_dir.mkdir(parents=True, exist_ok=True)
+    modmul_paths: list[Path] = []  # collect paths for Stage 3
 
     for i, module_spec in enumerate(analysis.innovations, 1):
         if module_filter and module_filter not in module_spec.module_name:
@@ -117,16 +121,55 @@ def run_pipeline(
                 result = generate_verilog(module_spec, client)
 
         file_path = save_verilog(result, verilog_dir)
+        modmul_paths.append(file_path)
         console.print(f"       Saved to: {file_path}")
 
+        # Golden model verification + fix loop
+        if use_verify and module_spec.category == "modular_arithmetic":
+            max_verify_rounds = 3
+            for v_round in range(1, max_verify_rounds + 1):
+                console.print(f"       Golden model check (round {v_round}/{max_verify_rounds})...")
+                try:
+                    passed, failures = verify_module(
+                        [str(file_path)],
+                        module_spec.module_name,
+                        "modmul",
+                        hardware_spec_params=module_spec.hardware_spec.parameters,
+                        num_vectors=4,
+                    )
+                except ValueError as e:
+                    console.print(f"       [yellow]Golden model: {e} — skipping verification[/yellow]")
+                    break
+                if passed:
+                    break
+                if v_round < max_verify_rounds:
+                    console.print(f"       [yellow]Fixing functional bugs...[/yellow]")
+                    try:
+                        result = fix_from_verification(
+                            module_spec, result.verilog_code, failures, client
+                        )
+                        # Re-save fixed code
+                        file_path = save_verilog(result, verilog_dir)
+                        console.print(f"       Re-saved to: {file_path}")
+                    except Exception as e:
+                        console.print(f"       [red]Fix failed (API error): {e}[/red]")
+                        break
+                else:
+                    console.print(f"       [red]Verification still failing after {max_verify_rounds} rounds[/red]")
+
     # Stage 3: Integrate into complete butterfly
+    bfly_path = None
     if not use_integrate:
         console.print("[yellow]--no-integrate: skipping butterfly integration.[/yellow]")
     else:
         console.print(Panel.fit("[bold]Stage 3: Integrating into Butterfly[/bold]", style="blue"))
         butterfly_dir = out_dir / "butterfly"
         with console.status("Generating butterfly top-level..."):
-            butterfly = generate_butterfly(analysis, client)
+            butterfly = generate_butterfly(
+                analysis,
+                modmul_paths[0] if modmul_paths else None,
+                client,
+            )
 
         bfly_path = save_butterfly(butterfly, butterfly_dir)
         console.print(f"  Butterfly saved to: {bfly_path}")
@@ -170,6 +213,11 @@ def main():
         action="store_true",
         help="Skip butterfly integration (only generate individual modules)",
     )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip golden model functional verification",
+    )
 
     args = parser.parse_args()
 
@@ -186,6 +234,7 @@ def main():
             dry_run=args.dry_run,
             use_review=not args.no_review,
             use_integrate=not args.no_integrate,
+            use_verify=not args.no_verify,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")

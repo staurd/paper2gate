@@ -66,6 +66,7 @@ class LLMClient:
         user_prompt: str,
         *,
         stage: str = "generate",
+        max_retries: int = 4,
     ) -> str:
         """
         Generate a response and return the raw text.
@@ -74,20 +75,33 @@ class LLMClient:
             stage: "extract" → expects JSON, applies _extract_json.
                    "generate" (default) → expects code, returns raw.
         """
+        import time
         stage_model_map = {
             "extract": self.extract_model,
             "generate": self.generate_model,
         }
         model = stage_model_map.get(stage, self.model)
 
-        if self.provider == "anthropic":
-            raw = self._call_anthropic_raw(system_prompt, user_prompt, model)
-        else:
-            raw = self._call_openai_raw(system_prompt, user_prompt, model)
+        last_error = None
+        for attempt in range(1 + max_retries):
+            try:
+                if self.provider == "anthropic":
+                    raw = self._call_anthropic_raw(system_prompt, user_prompt, model)
+                else:
+                    raw = self._call_openai_raw(system_prompt, user_prompt, model)
 
-        if stage == "extract":
-            return self._extract_json(raw)
-        return raw
+                if stage == "extract":
+                    return self._extract_json(raw)
+                return raw
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait = 2 ** attempt
+                    time.sleep(wait)
+                    continue
+        raise RuntimeError(
+            f"LLM API call failed after {max_retries + 1} attempts: {last_error}"
+        )
 
     def _get_client(self):
         if self._client is not None:

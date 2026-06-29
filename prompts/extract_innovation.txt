@@ -1,24 +1,28 @@
-You are an expert in digital hardware design and post-quantum cryptography. Your task is to analyze an academic paper describing NTT (Number Theoretic Transform) hardware and extract the **novel, innovative contributions** proposed by the authors.
+You are an expert in digital hardware design and post-quantum cryptography. Your task is to analyze an academic paper describing NTT (Number Theoretic Transform) hardware and extract ONLY innovations related to the **butterfly unit** and **modular arithmetic**.
 
-## What to look for
+## What to extract (ONLY these two categories)
 
-Identify the parts of the paper that are **original contributions** (not standard/well-known NTT components):
-- New modular reduction algorithms or arithmetic optimizations
-- New memory mapping / data storage schemes
-- New butterfly unit architectures
-- New twiddle factor generation methods
-- New pipeline or scheduling strategies
-- New permutation / reordering networks
-- New control logic or FSM designs
+1. **modular_arithmetic** — Novel modular multiplication or modular reduction algorithms for NTT/PQC. Examples:
+   - New modular reduction (K-Red, LUT-based, Barrett, Montgomery variants)
+   - New modular multiplier designs (DSP+logic hybrid, optimized constant multiplication)
+   - Any arithmetic optimization that reduces area/delay for modular operations
 
-## What to skip
+2. **butterfly** — Novel butterfly unit architectures. Examples:
+   - New unified CT/GS butterfly designs
+   - New pipeline optimizations for butterfly units
+   - New butterfly datapath that merges multiple operations
 
-Do NOT include standard NTT components that are well-known prior art:
-- Standard Cooley-Tukey or Gentleman-Sande butterfly structures
-- Standard dual-port BRAM configurations
-- Standard bit-reversal permutation
-- Generic counter/FSM boilerplate
+## What to SKIP (do NOT extract)
+
+- Memory architectures (BRAM banking, ping-pong schemes, storage layouts)
+- Twiddle factor ROM/generation methods
+- Permutation networks, bit-reversal, reordering
+- Control FSMs, address generators, scheduling strategies
+- Encoding/decoding, serialization, I/O interfaces
 - Standard Montgomery/Barrett reduction (unless the paper proposes a novel variation)
+- Standard Cooley-Tukey/Gentleman-Sande butterfly (unless the structure itself is modified)
+- Polynomial multiplication architectures outside the butterfly
+- Top-level NTT integration architectures
 
 ## Output format
 
@@ -30,7 +34,7 @@ Return a JSON object with this exact structure:
   "innovations": [
     {
       "module_name": "descriptive_snake_case_name",
-      "category": "one of: modular_arithmetic | memory | butterfly | twiddle | permutation | pipeline | control | interface",
+      "category": "modular_arithmetic or butterfly",
       "summary": "1-2 sentence description of the innovation",
       "hardware_spec": {
         "parameters": {
@@ -57,9 +61,10 @@ Return a JSON object with this exact structure:
 
 1. Each innovation must be an independently implementable hardware module.
 2. The hardware_spec must be detailed enough to generate Verilog from — include bit widths, cycle behavior, edge cases.
-3. If the paper proposes a modification to an existing structure, only capture the modified part (not the whole structure).
-4. Use the paper's exact parameter names and values where possible.
-5. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
+3. If the paper has NO butterfly or modular arithmetic innovations, return an empty innovations list: `"innovations": []`.
+4. If the paper proposes a modification to an existing structure, only capture the modified part (not the whole structure).
+5. Use the paper's exact parameter names and values where possible.
+6. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
 
 ## Paper text
 

@@ -89,10 +89,10 @@ def _run_iverilog(verilog_code: str) -> tuple[bool, str]:
             errors = result.stdout.strip()
         return False, errors
     except FileNotFoundError:
-        return True, f"WARNING: iverilog not found at '{iverilog_bin}'. " \
-                      "Install Icarus Verilog or set 'iverilog.binary' in config.yaml."
+        return False, f"WARNING: iverilog not found at '{iverilog_bin}'. " \
+                       "Install Icarus Verilog or set 'iverilog.binary' in config.yaml."
     except subprocess.TimeoutExpired:
-        return True, "WARNING: iverilog timed out."
+        return False, "WARNING: iverilog timed out."
     finally:
         try:
             Path(tmp.name).unlink()
@@ -234,7 +234,7 @@ def generate_with_check(
             console.print("    [green]Iverilog: PASSED[/green]")
             break
 
-        if errors.startswith("WARNING:"):
+        if not passed and errors.startswith("WARNING:"):
             console.print(f"    [yellow]{errors}[/yellow]")
             break
 
@@ -267,6 +267,50 @@ def save_verilog(module: GeneratedModule, output_dir: Path) -> Path:
     out_path = output_dir / f"{module.module_name}.v"
     out_path.write_text(module.verilog_code, encoding="utf-8")
     return out_path
+
+
+def fix_from_verification(
+    module_spec: ModuleSpec,
+    verilog_code: str,
+    failure_details: str,
+    client: LLMClient,
+) -> GeneratedModule:
+    """Ask LLM to fix Verilog code after golden model verification failures."""
+    import functools
+
+    @functools.lru_cache(maxsize=1)
+    def _load_fix_prompt():
+        return (PROMPT_DIR / "fix_from_verification.txt").read_text(encoding="utf-8")
+
+    user_prompt = _load_fix_prompt() \
+        .replace("{{failure_details}}", failure_details) \
+        .replace("{{verilog_code}}", verilog_code)
+
+    system_prompt = (
+        "You are a senior RTL design engineer. "
+        "Fix the functional bugs in the Verilog code based on test failures. "
+        "Respond ONLY with the complete fixed Verilog inside a markdown code fence."
+    )
+
+    raw = client.generate_structured(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        stage="generate",
+    )
+
+    fixed = extract_verilog(raw)
+
+    if not is_valid_module(fixed):
+        console.print("    [red]Verification fix produced invalid module[/red]")
+        return GeneratedModule(
+            module_name=module_spec.module_name,
+            verilog_code=verilog_code,
+        )
+
+    return GeneratedModule(
+        module_name=module_spec.module_name,
+        verilog_code=fixed,
+    )
 
 
 def save_error_logs(error_logs: list[str], module_name: str, output_dir: Path) -> Path:

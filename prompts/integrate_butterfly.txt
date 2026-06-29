@@ -1,86 +1,93 @@
-You are a senior RTL design engineer specializing in NTT butterfly hardware for post-quantum cryptography. Your task is to generate a complete, synthesizable NTT butterfly top-level module that integrates the paper's innovative sub-module(s) with standard butterfly components.
+You are a senior RTL design engineer specializing in NTT butterfly hardware for post-quantum cryptography. Generate a synthesizable unified CT/GS butterfly that integrates the paper's innovative modular multiplier, with the EXACT port interface required for Kyber polynomial multiplication hardware.
 
-## Standard Butterfly Architecture
+## Required Module Interface (MUST match exactly)
 
-The NTT butterfly for Kyber (q=3329, DATA_WIDTH=12) performs these operations:
-
-**Cooley-Tukey (CT):**
-```
-a_out = (a_in + b_in * w)  mod q
-b_out = (a_in - b_in * w)  mod q
-```
-
-**Gentleman-Sande (GS):**
-```
-a_out = (a_in + b_in) * w  mod q
-b_out = (a_in - b_in) * w  mod q
+```verilog
+module butterfly(
+    input clk, rst,                     // active-HIGH reset
+    input CT,                           // 1 = Cooley-Tukey, 0 = Gentleman-Sande
+    input PWM,                          // 1 = pointwise multiply mode
+    input [DATA_WIDTH-1:0] A, B, W,     // operands (W = twiddle factor)
+    output [DATA_WIDTH-1:0] E, O,       // butterfly outputs
+    output [DATA_WIDTH-1:0] MUL,        // modular multiplication output
+    output [DATA_WIDTH-1:0] ADD, SUB    // modular addition/subtraction outputs
+);
 ```
 
-Where `w` is a twiddle factor (constant for a given NTT stage).
+{% if innovations %}
+The effective modulus Q and data width come from the paper's hardware spec:
+{% for mod in innovations %}
+- Module: {{mod.module_name}} ({{mod.summary[:80]}}...)
+{% endfor %}
+{% endif %}
 
-## Standard Sub-Modules You Must Generate
+## Operation Modes
 
-In addition to the paper's innovative module, the butterfly needs these standard components:
+| Mode | CT | PWM | Behavior |
+|------|----|-----|----------|
+| Cooley-Tukey (FNTT) | 1 | 0 | E = A + B*W mod Q, O = A - B*W mod Q |
+| Gentleman-Sande (INTT) | 0 | 0 | E = (A+B)*W mod Q, O = (A-B)*W mod Q |
+| Pointwise Multiply | 1 | 1 | E = B*W mod Q, O = same |
 
-1. **mod_adder**: Combinational modular addition. `r = (a + b) mod q`. Use a simple unsigned add + conditional subtract if `(a + b) >= q`. Ports: `input [11:0] a, b; output [11:0] r`.
+In ALL modes: MUL outputs whatever the paper's modular multiplier computes (i.e., if it computes a*b*k mod q, MUL reflects that). ADD = (A+B) mod Q, SUB = (A-B) mod Q.
 
-2. **mod_subtractor**: Combinational modular subtraction. `r = (a - b) mod q`. Use unsigned subtract + conditional add of q if underflow. Ports: `input [11:0] a, b; output [11:0] r`.
+## Paper's Innovative Modular Multiplier
 
-## Paper's Innovative Module(s)
-
-The following innovative module(s) were extracted from the paper and already generated. Instantiate them in the butterfly.
+Instantiate this module. Its exact port names are:
 
 {% for mod in innovations %}
-### {{mod.module_name}} ({{mod.category}})
-Summary: {{mod.summary}}
-
-Ports:
+### {{mod.module_name}}
 {% for p in mod.hardware_spec.ports.input %}
-  input {{p.name}} [{{p.width}}]
-{% endfor %}
+  input {{p.name}} [{{p.width}}]{% endfor %}
 {% for p in mod.hardware_spec.ports.output %}
-  output {{p.name}} [{{p.width}}]
+  output {{p.name}} [{{p.width}}]{% endfor %}
 {% endfor %}
-{% endfor %}
 
-## Top-Level Module Specification
+## Standard Sub-Modules (you MUST generate inline)
 
-**Module Name**: `butterfly_top`
+1. **modadd** — combinational modular addition: `r = (a + b) mod Q`. Use conditional subtract: `sum = a + b; r = (sum >= Q) ? (sum - Q) : sum`.
+2. **modsub** — combinational modular subtraction: `r = (a - b) mod Q`. Use conditional add: `r = (a < b) ? (a - b + Q) : (a - b)`.
 
-**Parameters**: `DATA_WIDTH = 12`, `Q = 3329`
+## Architecture (data flow through pipeline stages)
 
-**Ports**:
-| Name | Width | Direction | Description |
-|------|-------|-----------|-------------|
-| clk | 1 | input | Clock |
-| rst_n | 1 | input | Active-low synchronous reset |
-| a_in | DATA_WIDTH | input | First butterfly operand |
-| b_in | DATA_WIDTH | input | Second butterfly operand |
-| w | DATA_WIDTH | input | Twiddle factor |
-| a_out | DATA_WIDTH | output | First butterfly result |
-| b_out | DATA_WIDTH | output | Second butterfly result |
-| valid_out | 1 | output | High when results are valid |
+Use parameters: `DATA_WIDTH` (from paper), `Q` (modulus from paper). Infer bit widths from DATA_WIDTH throughout — do NOT hardcode 12 or any specific number.
+
+```
+Stage 0 (input registers):
+  Register A, B, W on posedge clk (if rst, clear)
+
+Stage 1 (first operation — depends on CT):
+  CT=1: B_r * W_r → paper's modmul, then register product
+        Pass A_r through delay register (align with modmul latency)
+  CT=0: A_r + B_r → modadd, A_r - B_r → modsub, register both
+
+Stage 2 (second operation):
+  CT=1: modadd(A_delayed, modmul_output) → E_path
+        modsub(A_delayed, modmul_output) → O_path
+  CT=0: modmul(ADD_reg, W_delayed) → E_path
+        modmul(SUB_reg, W_delayed) → O_path
+
+Stage 3 (output registers):
+  Register E, O, MUL, ADD, SUB
+```
+
+For PWM mode: force CT=1 path, output modmul(B, W) on both E and O.
+
+## Pipeline Alignment
+
+- The paper's modmul has latency. Read its timing from the spec below.
+- Use shift registers or delay chains to align A with modmul output in CT mode, and W with ADD/SUB outputs in GS mode.
+- All outputs (E, O, MUL, ADD, SUB) should be registered at the final stage.
+
+{% if innovations %}
+Timing from paper spec: {{innovations[0].hardware_spec.timing}}
+{% endif %}
 
 ## Requirements
 
-1. Generate ALL modules in ONE file, with the top-level module first:
-   - `butterfly_top` (instantiates all sub-modules, wires them together)
-   - `mod_adder` (standard modular addition)
-   - `mod_subtractor` (standard modular subtraction)
-   - Do NOT regenerate the paper's innovative module — use its existing interface
-
-2. The butterfly_top must:
-   - Instantiate the paper's innovative module for the multiplication step
-   - Instantiate mod_adder and mod_subtractor for addition/subtraction
-   - Include pipeline registers at inputs/outputs for clean timing
-   - Generate a valid_out signal that accounts for any latency in the innovative module
-
-3. All modules must be synthesizable RTL (no initial/forever/$finish).
-
-4. Use parameter declarations for DATA_WIDTH and Q throughout.
-
-5. Add clear comments showing which sub-module is the paper's innovation.
-
-## Output
-
-Return ONLY the Verilog code in a markdown code fence. No explanations.
+1. Generate ALL modules in ONE file: butterfly (top), modadd, modsub
+2. The paper's modmul is instantiated but NOT regenerated
+3. All combinational arithmetic (modadd, modsub) is synthesizable
+4. Use `parameter DATA_WIDTH` and `parameter Q` — do not hardcode numeric values
+5. Reset is active-HIGH: `if (rst) ... <= 0;`
+6. Respond ONLY with Verilog code in a markdown code fence

@@ -8,3 +8,8 @@ xsim.dir/
 xvlog.pb
 a.out
 *.vvp
+
+test_papers/*.pdf
+tests/tb_bfly
+*.rpt
+scripts/_synth*.tcl

@@ -1,6 +1,5 @@
 """Quick regression tests for critical functions."""
 import re
-import sys
 
 # --- Test _extract_json ---
 from src.llm_client import LLMClient
