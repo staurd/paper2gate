@@ -1,19 +1,19 @@
 """Stage 3: Integrate paper's innovative modules into a unified CT/GS butterfly,
 compatible with KyberHPM1PE (acmert/kyber-polmul-hw) interface."""
 
+import functools
 import subprocess
 import tempfile
 from pathlib import Path
 
-from jinja2 import Template
 from rich.console import Console
 
 from src.ir_models import GeneratedModule, PaperAnalysis
 from src.llm_client import LLMClient
 from src.code_generator import _load_iverilog_config
+from src.prompt_manager import load_prompt
 from src.verilog_utils import extract_verilog, is_valid_module
 
-PROMPT_DIR = Path(__file__).parent.parent / "prompts"
 console = Console()
 
 
@@ -31,10 +31,7 @@ def generate_butterfly(
       module butterfly(input clk, rst, CT, PWM, input [11:0] A,B,W,
                        output [11:0] E,O, MUL, ADD,SUB);
     """
-    source = (PROMPT_DIR / "integrate_butterfly.txt").read_text(encoding="utf-8")
-    template = Template(source)
-
-    user_prompt = template.render(innovations=analysis.innovations)
+    user_prompt = load_prompt("integrate_butterfly.jinja", innovations=analysis.innovations)
 
     system_prompt = (
         "You are a senior RTL design engineer specializing in PQC hardware. "
@@ -106,14 +103,7 @@ def _fix_butterfly(
     verilog_code: str, iverilog_errors: str, client: LLMClient,
 ) -> GeneratedModule:
     """Ask LLM to fix the butterfly based on iverilog errors, keeping the correct port interface."""
-    import functools
-
-    @functools.lru_cache(maxsize=1)
-    def _load_fix_prompt():
-        return (PROMPT_DIR / "fix_verilog.txt").read_text(encoding="utf-8")
-
-    prompt = _load_fix_prompt()
-    user_prompt = prompt \
+    user_prompt = load_prompt("fix_verilog.jinja") \
         .replace("{{iverilog_errors}}", iverilog_errors) \
         .replace("{{verilog_code}}", verilog_code)
     user_prompt += (

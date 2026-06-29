@@ -5,12 +5,7 @@ from pathlib import Path
 
 from src.ir_models import HardwareSpec, ModuleSpec, PaperAnalysis, PortSpec
 from src.llm_client import LLMClient
-
-PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "extract_innovation.txt"
-
-
-def _load_prompt() -> str:
-    return PROMPT_PATH.read_text(encoding="utf-8")
+from src.prompt_manager import load_prompt
 
 
 def extract_innovations(
@@ -25,9 +20,8 @@ def extract_innovations(
     Truncates paper text to max_chars to fit LLM context window.
     Retries on JSON parse failure with a stricter prompt.
     """
-    prompt = _load_prompt()
     truncated = paper_text[:max_chars]
-    user_prompt = prompt.replace("{{paper_text}}", truncated)
+    user_prompt = load_prompt("extract_innovation.jinja", paper_text=truncated)
 
     system_prompt = (
         "You are an expert hardware design analyst. "

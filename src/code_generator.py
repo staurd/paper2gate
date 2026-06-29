@@ -1,21 +1,18 @@
 """Stage 2: Generate Verilog code from hardware module specifications,
 with iverilog syntax checking and auto-fix loop."""
 
-import functools
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Template
 from rich.console import Console
 
 from src.ir_models import GeneratedModule, ModuleSpec
 from src.llm_client import LLMClient
+from src.prompt_manager import load_prompt
 from src.verilog_utils import extract_verilog, is_valid_module
-
-PROMPT_DIR = Path(__file__).parent.parent / "prompts"
 
 console = Console()
 
@@ -41,16 +38,9 @@ def _spec_context(module_spec: ModuleSpec) -> dict[str, Any]:
     }
 
 
-def _render_prompt(name: str, ctx: dict[str, Any]) -> str:
-    source = (PROMPT_DIR / name).read_text(encoding="utf-8")
-    return Template(source).render(**ctx)
-
-
 # ---------------------------------------------------------------------------
 # Iverilog Integration
 # ---------------------------------------------------------------------------
-
-@functools.lru_cache(maxsize=1)
 def _load_iverilog_config() -> tuple[str, str]:
     """Read iverilog settings from config.yaml. Cached — reads once."""
     config_path = Path(__file__).parent.parent / "config.yaml"
@@ -104,11 +94,6 @@ def _run_iverilog(verilog_code: str) -> tuple[bool, str]:
 # Fix from iverilog errors
 # ---------------------------------------------------------------------------
 
-@functools.lru_cache(maxsize=1)
-def _fix_prompt_template() -> str:
-    return (PROMPT_DIR / "fix_verilog.txt").read_text(encoding="utf-8")
-
-
 def _fix_from_iverilog(
     module_spec: ModuleSpec,
     verilog_code: str,
@@ -116,8 +101,7 @@ def _fix_from_iverilog(
     client: LLMClient,
 ) -> GeneratedModule:
     """Ask LLM to fix the Verilog code based on iverilog error output."""
-    template = _fix_prompt_template()
-    user_prompt = template \
+    user_prompt = load_prompt("fix_verilog.jinja") \
         .replace("{{iverilog_errors}}", iverilog_errors) \
         .replace("{{verilog_code}}", verilog_code)
 
@@ -158,7 +142,7 @@ def generate_verilog(
 ) -> GeneratedModule:
     """Generate a Verilog module from a hardware spec. No auto-fix loop."""
     ctx = _spec_context(module_spec)
-    user_prompt = _render_prompt("generate_verilog.txt", ctx)
+    user_prompt = load_prompt("generate_verilog.jinja", **ctx)
 
     base_system = (
         "You are a senior RTL design engineer. "
@@ -276,13 +260,7 @@ def fix_from_verification(
     client: LLMClient,
 ) -> GeneratedModule:
     """Ask LLM to fix Verilog code after golden model verification failures."""
-    import functools
-
-    @functools.lru_cache(maxsize=1)
-    def _load_fix_prompt():
-        return (PROMPT_DIR / "fix_from_verification.txt").read_text(encoding="utf-8")
-
-    user_prompt = _load_fix_prompt() \
+    user_prompt = load_prompt("fix_from_verification.jinja") \
         .replace("{{failure_details}}", failure_details) \
         .replace("{{verilog_code}}", verilog_code)
 

@@ -11,10 +11,9 @@ from rich.console import Console
 from src.ir_models import GeneratedModule, PaperAnalysis
 from src.llm_client import LLMClient
 from src.code_generator import _load_iverilog_config, _run_iverilog, _fix_from_iverilog
+from src.prompt_manager import load_prompt
 from src.verification_runner import _scan_ports
 from src.verilog_utils import extract_verilog, is_valid_module
-
-PROMPT_DIR = Path(__file__).parent.parent / "prompts"
 console = Console()
 
 # Kyber defaults (used when paper doesn't specify)
@@ -99,17 +98,11 @@ def generate_ntt(
             bfly_timing = f"From paper spec: {timing}"
 
     # --- Render prompt ---
-    source = (PROMPT_DIR / "generate_ntt.txt").read_text(encoding="utf-8")
-    user_prompt = source \
-        .replace("{{twiddle_values}}", twiddle_case) \
-        .replace("{{q}}", str(q)) \
-        .replace("{{omega}}", str(omega)) \
-        .replace("{{n}}", str(n)) \
-        .replace("{{log_n}}", str(log_n)) \
-        .replace("{{dw}}", str(dw)) \
-        .replace("{{dw_minus_1}}", str(dw - 1)) \
-        .replace("{{butterfly_ports}}", bfly_port_text) \
-        .replace("{{butterfly_timing}}", bfly_timing)
+    user_prompt = load_prompt("generate_ntt.jinja",
+        twiddle_values=twiddle_case, q=str(q), omega=str(omega),
+        n=str(n), log_n=str(log_n), dw=str(dw), dw_minus_1=str(dw - 1),
+        butterfly_ports=bfly_port_text, butterfly_timing=bfly_timing,
+    )
 
     system_prompt = (
         "You are a senior RTL design engineer specializing in PQC hardware. "
