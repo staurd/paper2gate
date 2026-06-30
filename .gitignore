@@ -13,3 +13,9 @@ test_papers/*.pdf
 tests/tb_bfly
 *.rpt
 scripts/_synth*.tcl
+vivado.jou
+vivado.log
+vivado_*.jou
+vivado_*.log
+*.backup.jou
+*.backup.log

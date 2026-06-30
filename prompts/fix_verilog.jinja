@@ -19,3 +19,4 @@ You are a senior RTL design engineer. The Verilog code below has syntax or compi
 3. Output the COMPLETE fixed module (module ... endmodule)
 4. Common fixes: undeclared signals → add wire/reg; width mismatches → fix widths; missing semicolons → add them; wrong port order → reorder to match declaration
 5. Respond ONLY with the Verilog code in a markdown code fence. No explanations.
+6. **STRICTLY Verilog-2001** — do NOT use SystemVerilog. Replace `always_ff` → `always @(posedge clk)`, `always_comb` → `always @*`, `logic` → `wire/reg`. Replace `N'(expr)` size casts with a `localparam` of the desired width.

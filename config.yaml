@@ -17,3 +17,7 @@ iverilog:
   binary: D:/Program Files (x86)/iverilog/bin/iverilog.exe
   # Extra flags passed to iverilog (e.g., "-g2012" for SystemVerilog support)
   flags: "-g2012"
+
+yosys:
+  binary: E:/download/oss-cad-suite/bin/yosys.exe
+  lib_path: E:/download/oss-cad-suite/lib

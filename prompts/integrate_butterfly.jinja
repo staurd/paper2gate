@@ -90,4 +90,9 @@ Timing from paper spec: {{innovations[0].hardware_spec.timing}}
 3. All combinational arithmetic (modadd, modsub) is synthesizable
 4. Use `parameter DATA_WIDTH` and `parameter Q` — do not hardcode numeric values
 5. Reset is active-HIGH: `if (rst) ... <= 0;`
-6. Respond ONLY with Verilog code in a markdown code fence
+6. **STRICTLY Verilog-2001** — do NOT use any SystemVerilog constructs:
+   - `always_ff` → `always @(posedge clk or posedge rst)`
+   - `always_comb` → `always @*`
+   - `logic` → `wire`/`reg`
+   - `N'(expr)` → declare `localparam [N-1:0] NAME = VALUE;`
+7. Respond ONLY with Verilog code in a markdown code fence

@@ -103,9 +103,8 @@ def _fix_butterfly(
     verilog_code: str, iverilog_errors: str, client: LLMClient,
 ) -> GeneratedModule:
     """Ask LLM to fix the butterfly based on iverilog errors, keeping the correct port interface."""
-    user_prompt = load_prompt("fix_verilog.jinja") \
-        .replace("{{iverilog_errors}}", iverilog_errors) \
-        .replace("{{verilog_code}}", verilog_code)
+    user_prompt = load_prompt("fix_verilog.jinja",
+        iverilog_errors=iverilog_errors, verilog_code=verilog_code)
     user_prompt += (
         "\n\nIMPORTANT: The module name MUST be 'butterfly' with ports: "
         "input clk, rst, CT, PWM, input [11:0] A, B, W, "

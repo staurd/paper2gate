@@ -101,9 +101,8 @@ def _fix_from_iverilog(
     client: LLMClient,
 ) -> GeneratedModule:
     """Ask LLM to fix the Verilog code based on iverilog error output."""
-    user_prompt = load_prompt("fix_verilog.jinja") \
-        .replace("{{iverilog_errors}}", iverilog_errors) \
-        .replace("{{verilog_code}}", verilog_code)
+    user_prompt = load_prompt("fix_verilog.jinja",
+        iverilog_errors=iverilog_errors, verilog_code=verilog_code)
 
     system_prompt = (
         "You are a senior RTL design engineer. "
@@ -260,9 +259,8 @@ def fix_from_verification(
     client: LLMClient,
 ) -> GeneratedModule:
     """Ask LLM to fix Verilog code after golden model verification failures."""
-    user_prompt = load_prompt("fix_from_verification.jinja") \
-        .replace("{{failure_details}}", failure_details) \
-        .replace("{{verilog_code}}", verilog_code)
+    user_prompt = load_prompt("fix_from_verification.jinja",
+        failure_details=failure_details, verilog_code=verilog_code)
 
     system_prompt = (
         "You are a senior RTL design engineer. "

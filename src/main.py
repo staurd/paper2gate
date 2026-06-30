@@ -22,6 +22,7 @@ from src.integration_generator import generate_butterfly, save_butterfly
 from src.llm_client import LLMClient
 from src.pdf_parser import extract_text
 from src.verification_runner import verify_module
+from src.vivado_report import run_synthesis
 
 console = Console()
 
@@ -44,6 +45,7 @@ def run_pipeline(
     use_review: bool = True,
     use_integrate: bool = True,
     use_verify: bool = True,
+    use_synth: bool = True,
 ) -> Path:
     """Run the full paper-to-Verilog pipeline."""
     project_root = Path(__file__).parent.parent
@@ -174,6 +176,16 @@ def run_pipeline(
         bfly_path = save_butterfly(butterfly, butterfly_dir)
         console.print(f"  Butterfly saved to: {bfly_path}")
 
+        # Vivado resource synthesis
+        if use_synth:
+            console.print(Panel.fit("[bold]Stage 3b: Resource Estimation (Vivado)[/bold]", style="blue"))
+            vfiles = list(modmul_paths) + [bfly_path]
+            run_synthesis(
+                [str(p) for p in vfiles],
+                top="butterfly",
+                output_dir=out_dir,
+            )
+
     console.print(f"\n[bold green]Done![/bold green] All outputs in: {out_dir}")
     return out_dir
 
@@ -218,6 +230,11 @@ def main():
         action="store_true",
         help="Skip golden model functional verification",
     )
+    parser.add_argument(
+        "--no-synth",
+        action="store_true",
+        help="Skip Vivado resource synthesis",
+    )
 
     args = parser.parse_args()
 
@@ -235,6 +252,7 @@ def main():
             use_review=not args.no_review,
             use_integrate=not args.no_integrate,
             use_verify=not args.no_verify,
+            use_synth=not args.no_synth,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")

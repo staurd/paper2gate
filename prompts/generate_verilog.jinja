@@ -32,6 +32,12 @@ The output MUST start with `module` and end with `endmodule`. This is non-negoti
 - No latches — all combinational paths must be fully specified
 - Add brief comments only where the logic is non-obvious
 - The module name and port names must match the specification exactly
+- **STRICTLY Verilog-2001** — do NOT use any SystemVerilog constructs:
+  - NO `always_ff` — use `always @(posedge clk)` for sequential logic
+  - NO `always_comb` — use `always @*` for combinational logic
+  - NO `logic` type — use `wire` or `reg`
+  - NO `N'(expr)` size casts — for fixed-width constants, declare a `localparam [N-1:0] NAME = VALUE;` and use that
+  - NO `$error`, `$warning`, or other SystemVerilog system functions
 
 ## Hardware Specification
 

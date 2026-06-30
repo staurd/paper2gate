@@ -20,3 +20,4 @@ You are a senior RTL design engineer. The Verilog module below has been tested a
 4. Output the COMPLETE fixed module (module ... endmodule)
 5. Keep the same module name, port names, and parameters
 6. Respond ONLY with the Verilog code inside a markdown code fence. No explanations.
+7. **STRICTLY Verilog-2001** — do NOT use SystemVerilog. Replace `always_ff` → `always @(posedge clk)`, `always_comb` → `always @*`, `logic` → `wire/reg`. Replace `N'(expr)` size casts with a `localparam` of the desired width.
