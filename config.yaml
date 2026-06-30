@@ -21,3 +21,6 @@ iverilog:
 yosys:
   binary: E:/download/oss-cad-suite/bin/yosys.exe
   lib_path: E:/download/oss-cad-suite/lib
+
+vivado:
+  binary: D:/Vivado2018.3/Vivado/2018.3/bin/vivado.BAT

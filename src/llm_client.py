@@ -3,45 +3,19 @@
 import os
 import re
 from pathlib import Path
-from typing import Any
 
-import yaml
 from dotenv import load_dotenv
+
+from src.config import get_llm_config
 
 # Auto-load .env from project root
 _env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(_env_path)
 
 
-def _resolve_env(value: str) -> str:
-    """Resolve ${ENV_VAR} placeholders in config values."""
-    pattern = re.compile(r"\$\{(\w+)\}")
-    match = pattern.fullmatch(value)
-    if match:
-        return os.environ.get(match.group(1), "")
-    return pattern.sub(lambda m: os.environ.get(m.group(1), ""), value)
-
-
-def load_config(path: str = "config.yaml") -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    return _resolve_config_env(raw)
-
-
-def _resolve_config_env(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        return {k: _resolve_config_env(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_resolve_config_env(v) for v in obj]
-    if isinstance(obj, str):
-        return _resolve_env(obj)
-    return obj
-
-
 class LLMClient:
-    def __init__(self, config_path: str = "config.yaml"):
-        config = load_config(config_path)
-        llm_cfg = config["llm"]
+    def __init__(self, config_path: str | None = None):
+        llm_cfg = get_llm_config()
         self.provider = llm_cfg["provider"]
         self.model = llm_cfg["model"]
         self.extract_model = llm_cfg.get("extract_model", llm_cfg["model"])

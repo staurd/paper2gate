@@ -3,22 +3,16 @@
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
-from rich.console import Console
-
-console = Console()
+from src.config import get_vivado_config
+from src.console import console
 
 
 def _find_vivado() -> str:
-    """Find vivado binary. Checks PATH, common install locations, config."""
-    import yaml
-    # Check config first
-    config_path = Path(__file__).parent.parent / "config.yaml"
+    """Find vivado binary. Checks config, then PATH."""
     try:
-        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        path = cfg.get("vivado", {}).get("binary", "")
+        path = get_vivado_config().get("binary", "")
         if path and Path(path).exists():
             return path
     except Exception:

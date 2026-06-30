@@ -6,15 +6,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import yaml
-from rich.console import Console
-
+from src.config import get_iverilog_config
+from src.console import console
 from src.ir_models import GeneratedModule, ModuleSpec
 from src.llm_client import LLMClient
 from src.prompt_manager import load_prompt
-from src.verilog_utils import extract_verilog, is_valid_module
-
-console = Console()
+from src.verilog_utils import cleanup, extract_verilog, is_valid_module
 
 
 # ---------------------------------------------------------------------------
@@ -42,14 +39,8 @@ def _spec_context(module_spec: ModuleSpec) -> dict[str, Any]:
 # Iverilog Integration
 # ---------------------------------------------------------------------------
 def _load_iverilog_config() -> tuple[str, str]:
-    """Read iverilog settings from config.yaml. Cached — reads once."""
-    config_path = Path(__file__).parent.parent / "config.yaml"
-    try:
-        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        iv_cfg = cfg.get("iverilog", {})
-        return iv_cfg.get("binary", "iverilog"), iv_cfg.get("flags", "-g2012")
-    except Exception:
-        return "iverilog", "-g2012"
+    iv_cfg = get_iverilog_config()
+    return iv_cfg.get("binary", "iverilog"), iv_cfg.get("flags", "-g2012")
 
 
 def _run_iverilog(verilog_code: str) -> tuple[bool, str]:
@@ -85,7 +76,7 @@ def _run_iverilog(verilog_code: str) -> tuple[bool, str]:
         return False, "WARNING: iverilog timed out."
     finally:
         try:
-            Path(tmp.name).unlink()
+            cleanup(Path(tmp.name))
         except OSError:
             pass
 

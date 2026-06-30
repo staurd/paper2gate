@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
+from src.console import console
 from rich.panel import Panel
 from rich.table import Table
 
@@ -23,8 +23,6 @@ from src.llm_client import LLMClient
 from src.pdf_parser import extract_text
 from src.verification_runner import verify_module
 from src.vivado_report import run_synthesis
-
-console = Console()
 
 
 def build_output_dir(pdf_path: str, base_dir: str = "outputs") -> Path:

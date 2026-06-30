@@ -1,20 +1,16 @@
 """Stage 3: Integrate paper's innovative modules into a unified CT/GS butterfly,
 compatible with KyberHPM1PE (acmert/kyber-polmul-hw) interface."""
 
-import functools
 import subprocess
 import tempfile
 from pathlib import Path
 
-from rich.console import Console
-
+from src.config import get_iverilog_config
+from src.console import console
 from src.ir_models import GeneratedModule, PaperAnalysis
 from src.llm_client import LLMClient
-from src.code_generator import _load_iverilog_config
 from src.prompt_manager import load_prompt
-from src.verilog_utils import extract_verilog, is_valid_module
-
-console = Console()
+from src.verilog_utils import cleanup, extract_verilog, is_valid_module
 
 
 def generate_butterfly(
@@ -67,7 +63,7 @@ def generate_butterfly(
         iv_files.append(str(tmp.name))
         temp_paths = [Path(tmp.name)]
 
-        iv_bin, iv_flags = _load_iverilog_config()
+        iv_cfg = get_iverilog_config(); iv_bin = iv_cfg.get("binary", "iverilog"); iv_flags = iv_cfg.get("flags", "-g2012")
         for round_num in range(1, max_fix_rounds + 1):
             console.print(f"    Iverilog butterfly check "
                           f"({len(iv_files)} files, round {round_num}/{max_fix_rounds})...")
@@ -77,7 +73,7 @@ def generate_butterfly(
 
             if result.returncode == 0:
                 console.print("    [green]Butterfly: iverilog PASSED[/green]")
-                _cleanup(*temp_paths, exe)
+                cleanup(*temp_paths, exe)
                 break
 
             errors = result.stderr.strip() or result.stdout.strip()
@@ -92,9 +88,9 @@ def generate_butterfly(
                 temp_paths[0].write_text(module.verilog_code, encoding="utf-8")
             else:
                 console.print(f"    [red]Max fix rounds reached[/red]")
-                _cleanup(*temp_paths, exe)
+                cleanup(*temp_paths, exe)
 
-        _cleanup(*temp_paths, exe)
+        cleanup(*temp_paths, exe)
 
     return module
 
@@ -126,14 +122,6 @@ def _fix_butterfly(
         return GeneratedModule(module_name="butterfly", verilog_code=verilog_code)
 
     return GeneratedModule(module_name="butterfly", verilog_code=fixed)
-
-
-def _cleanup(*paths: Path):
-    for p in paths:
-        try:
-            p.unlink()
-        except OSError:
-            pass
 
 
 def save_butterfly(module: GeneratedModule, output_dir: Path) -> Path:

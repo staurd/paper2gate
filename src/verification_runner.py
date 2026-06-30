@@ -6,63 +6,16 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-from rich.console import Console
-
-from src.golden_model import (
-    ct_butterfly,
-    generate_test_vectors,
-    mod_mul,
-    parse_module_params,
-)
-from src.code_generator import _load_iverilog_config
-
-console = Console()
-IVERILOG_BIN, IVERILOG_FLAGS = None, None
+from src.config import get_iverilog_config
+from src.console import console
+from src.golden_model import generate_test_vectors, mod_mul
+from src.ir_models import parse_module_params
+from src.verilog_utils import cleanup, scan_ports
 
 
 def _get_iv() -> tuple[str, str]:
-    global IVERILOG_BIN, IVERILOG_FLAGS
-    if IVERILOG_BIN is None:
-        IVERILOG_BIN, IVERILOG_FLAGS = _load_iverilog_config()
-    return IVERILOG_BIN, IVERILOG_FLAGS
-
-
-# ---------------------------------------------------------------------------
-# Port scanner
-# ---------------------------------------------------------------------------
-
-def _scan_ports(verilog_files: list[str], module_name: str) -> dict:
-    """Scan module port list. Returns {has_clk, has_rst, inputs, outputs}."""
-    import re
-    for fpath in verilog_files:
-        src = Path(fpath).read_text(encoding="utf-8", errors="ignore")
-        m = re.search(
-            rf'module\s+{module_name}\s*(?:#\([^)]*\))?\s*\(([^;]+)\)',
-            src, re.DOTALL,
-        )
-        if not m:
-            continue
-        ports_block = m.group(1)
-        inputs, outputs = [], []
-        has_clk, has_rst = False, False
-        for line in ports_block.split("\n"):
-            m2 = re.match(
-                r'(input|output)\s+(?:wire|reg)?\s*(?:\[[\w:*-]+\])?\s*(\w+)',
-                line.strip(),
-            )
-            if not m2:
-                continue
-            direction, name = m2.group(1), m2.group(2)
-            if "clk" in name.lower():
-                has_clk = True
-            elif "rst" in name.lower():
-                has_rst = True
-            if direction == "input":
-                inputs.append(name)
-            else:
-                outputs.append(name)
-        return {"has_clk": has_clk, "has_rst": has_rst, "inputs": inputs, "outputs": outputs}
-    return {"has_clk": True, "has_rst": True, "inputs": ["a", "b"], "outputs": ["r"]}
+    iv_cfg = get_iverilog_config()
+    return iv_cfg.get("binary", "iverilog"), iv_cfg.get("flags", "-g2012")
 
 
 # ---------------------------------------------------------------------------
@@ -160,27 +113,18 @@ def _run_simulation(
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
     if result.returncode != 0:
-        _cleanup(tb_path, exe_path)
+        cleanup(tb_path, exe_path)
         return False, result.stderr.strip()
 
     vvp_bin = shutil.which("vvp") or str(Path(iv_bin).parent / "vvp")
     result = subprocess.run([vvp_bin, str(exe_path)], capture_output=True, text=True, timeout=30)
-    _cleanup(tb_path, exe_path)
+    cleanup(tb_path, exe_path)
 
     output = result.stdout + result.stderr
     if "ALL" in output and "TESTS PASSED" in output:
         return True, ""
-    # Collect FAIL lines
     fail_lines = [l.strip() for l in output.split("\n") if "FAIL" in l]
     return False, "\n".join(fail_lines)
-
-
-def _cleanup(*paths: Path):
-    for p in paths:
-        try:
-            p.unlink()
-        except OSError:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -200,14 +144,12 @@ def verify_module(
 
     Returns (passed, failure_details).
     """
-    import random
-
     params = parse_module_params(hardware_spec_params or {})
     dw = params["DATA_WIDTH"]
     q = params["Q"]
     k = params["K"]
 
-    ports = _scan_ports(verilog_files, module_name)
+    ports = scan_ports(verilog_files, module_name)
 
     if module_type == "modmul":
         vectors = generate_test_vectors(num_vectors, q)
@@ -215,17 +157,7 @@ def verify_module(
             v["expected"] = mod_mul(v["a"], v["b"], q, k)
         tb = _gen_modmul_testbench(module_name, vectors, ports, latency, dw)
     elif module_type == "butterfly":
-        rng = random.Random(42)
-        vectors = []
-        k_inv = pow(k, -1, q) if k is not None else 1
-        for _ in range(num_vectors):
-            a = rng.randint(0, q - 1)
-            b = rng.randint(0, q - 1)
-            w_raw = rng.randint(1, q - 1)
-            w = (w_raw * k_inv) % q
-            ea, eb = ct_butterfly(a, b, w, q, k)
-            vectors.append({"a": a, "b": b, "w": w, "expected_a": ea, "expected_b": eb})
-        tb = _gen_butterfly_testbench(module_name, vectors, ports, latency, dw)
+        return False, "Butterfly verification not yet implemented — verify modmul module directly"
     else:
         return False, f"Unknown module type: {module_type}"
 

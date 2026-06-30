@@ -3,16 +3,12 @@
 Usage:
     from src.prompt_manager import load_prompt
 
-    # Simple: load + render with Jinja2 variables
-    prompt = load_prompt("generate_verilog.txt",
+    # Render with Jinja2 variables
+    prompt = load_prompt("generate_verilog.jinja",
                          module_name="foo", category="bar", ...)
 
-    # Plain: load text without rendering
-    text = load_prompt("fix_verilog.txt")
-
-    # Render after load (for str.replace usage)
-    text = load_prompt("fix_verilog.txt")
-    text = text.replace("{{old}}", "new")
+    # Load raw text without rendering
+    text = load_prompt("fix_verilog.jinja")
 """
 
 import functools
