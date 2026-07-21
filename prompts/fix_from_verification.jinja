@@ -1,5 +1,17 @@
 You are a senior RTL design engineer. The Verilog module below has been tested against a Python golden model and produced WRONG outputs. The testbench ran random inputs and compared the results against correct modular arithmetic. Fix the implementation so that it computes the correct results.
 
+## Intended Algorithm (MUST be preserved)
+
+This module implements a specific algorithm from a research paper. Your job is to fix a *bug in the implementation*, NOT to change the algorithm.
+{% if summary %}
+- **What it does:** {{summary}}
+{%- endif %}
+{% if behavior %}
+- **Required behavior:** {{behavior}}
+{%- endif %}
+
+Do NOT replace the paper's reduction technique with a generic one (e.g. do not swap a K-reduction / LUT-based / Barrett scheme for a plain `%` operator or a different reduction family). Keep the same structural approach, pipeline stages, and math strategy — only correct the defect that causes wrong outputs.
+
 ## Failed Tests
 
 ```
@@ -15,7 +27,7 @@ You are a senior RTL design engineer. The Verilog module below has been tested a
 ## Instructions
 
 1. Analyze each failure: look at the input values, the expected output, and the actual (wrong) output
-2. Find the root cause in the Verilog implementation — is it an arithmetic error, a sign/unsigned issue, a bit-width problem, or incorrect algorithm logic?
+2. Find the root cause in the Verilog implementation — is it an arithmetic error, a sign/unsigned issue, a bit-width problem, or a logic error in wiring up the intended algorithm? (The algorithm choice itself is correct and must stay; the bug is in how it was coded.)
 3. Fix the implementation so ALL test cases produce the correct output
 4. Output the COMPLETE fixed module (module ... endmodule)
 5. Keep the same module name, port names, and parameters

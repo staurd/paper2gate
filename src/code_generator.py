@@ -262,7 +262,9 @@ def fix_from_verification(
 ) -> GeneratedModule:
     """Ask LLM to fix Verilog code after golden model verification failures."""
     user_prompt = load_prompt("fix_from_verification.jinja",
-        failure_details=failure_details, verilog_code=verilog_code)
+        failure_details=failure_details, verilog_code=verilog_code,
+        summary=module_spec.summary,
+        behavior=module_spec.hardware_spec.behavior)
 
     system_prompt = (
         "You are a senior RTL design engineer. "
