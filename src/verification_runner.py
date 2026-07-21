@@ -34,9 +34,19 @@ def _gen_modmul_testbench(
         raise ValueError(f"Module {module_name} has only {len(data_in)} data inputs, need 2 for modmul verification")
     in_a, in_b = data_in[0], data_in[1]
     out_r = ports["outputs"][0]
-    clk_line = ".clk(clk)," if ports["has_clk"] else ""
-    rst_line = ".rst_n(rst_n)," if ports["has_rst"] else ""
+
+    # Find actual clock/reset port names (handle both "clk"/"rst" and "clk"/"rst_n")
+    clk_port = next((p for p in ports["inputs"] if "clk" in p.lower()), "clk")
+    rst_port = next((p for p in ports["inputs"] if "rst" in p.lower()), "rst_n")
+    rst_active_high = not rst_port.endswith("_n")  # "rst" = active-high, "rst_n" = active-low
+
+    clk_line = f".{clk_port}(clk)," if ports["has_clk"] else ""
+    rst_line = f".{rst_port}(rst_n)," if ports["has_rst"] else ""
     clk_wait = f"repeat({latency + 1}) @(posedge clk);" if ports["has_clk"] else "#1;"
+
+    # Reset polarity: drive rst_n low for active-low, high for active-high
+    rst_init = "1'b1" if rst_active_high else "1'b0"
+    rst_release = "1'b0" if rst_active_high else "1'b1"
 
     tests = []
     for i, v in enumerate(vectors):
@@ -74,10 +84,10 @@ def _gen_modmul_testbench(
         always #5 clk = ~clk;
 
         initial begin
-            clk = 0; rst_n = 1'b0;
+            clk = 0; rst_n = {rst_init};
             {in_a} = 0; {in_b} = 0;
             errors = 0;
-            #15 rst_n = 1'b1;
+            #15 rst_n = {rst_release};
             @(posedge clk);
 
     {test_body}
@@ -90,6 +100,7 @@ def _gen_modmul_testbench(
         end
     endmodule
     """)
+
 
 
 # ---------------------------------------------------------------------------

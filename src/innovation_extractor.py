@@ -13,15 +13,24 @@ def extract_innovations(
     client: LLMClient,
     max_chars: int = 50000,
     max_retries: int = 2,
+    target_interface: str | None = None,
 ) -> PaperAnalysis:
     """
     Extract innovative hardware modules from paper text.
 
     Truncates paper text to max_chars to fit LLM context window.
     Retries on JSON parse failure with a stricter prompt.
+
+    Args:
+        target_interface: If "modred", add target interface constraint
+                          so extracted ports match the reference modred.v.
     """
     truncated = paper_text[:max_chars]
-    user_prompt = load_prompt("extract_innovation.jinja", paper_text=truncated)
+    user_prompt = load_prompt(
+        "extract_innovation.jinja",
+        paper_text=truncated,
+        target_interface=target_interface,
+    )
 
     system_prompt = (
         "You are an expert hardware design analyst. "
@@ -68,7 +77,7 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
             ports[direction] = [
                 PortSpec(
                     name=p["name"],
-                    width=p.get("width", "1"),
+                    width=str(p.get("width", "1")),
                     direction=direction,
                     desc=p.get("desc", ""),
                 )

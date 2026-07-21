@@ -44,8 +44,17 @@ def run_pipeline(
     use_integrate: bool = True,
     use_verify: bool = True,
     use_synth: bool = True,
+    target_interface: str | None = None,
 ) -> Path:
-    """Run the full paper-to-Verilog pipeline."""
+    """Run the full paper-to-Verilog pipeline.
+
+    Args:
+        target_interface: If "modmul", extract and generate a modmul module
+                          with the fixed interface (clk,rst,A,B→R). The
+                          intmul+P_R front-end is fixed; only the modular
+                          reduction logic is generated from the paper.
+                          Auto-skips butterfly integration.
+    """
     project_root = Path(__file__).parent.parent
 
     # Resolve paths relative to project root
@@ -73,7 +82,7 @@ def run_pipeline(
     # Stage 1: Extract innovations
     console.print(Panel.fit("[bold]Stage 1: Extracting Innovations[/bold]", style="blue"))
     with console.status("Analyzing paper with LLM (this may take 30-60s)..."):
-        analysis = extract_innovations(paper_text, client)
+        analysis = extract_innovations(paper_text, client, target_interface=target_interface)
 
     spec_path = save_specs(analysis, out_dir)
     console.print(f"  Found [green]{len(analysis.innovations)}[/green] innovations")
@@ -115,10 +124,14 @@ def run_pipeline(
 
         with console.status(f"  Working on {module_spec.module_name}..."):
             if use_review:
-                result, error_logs = generate_with_check(module_spec, client)
+                result, error_logs = generate_with_check(
+                    module_spec, client, target_interface=target_interface,
+                )
                 save_error_logs(error_logs, module_spec.module_name, review_dir)
             else:
-                result = generate_verilog(module_spec, client)
+                result = generate_verilog(
+                    module_spec, client, target_interface=target_interface,
+                )
 
         file_path = save_verilog(result, verilog_dir)
         modmul_paths.append(file_path)
@@ -126,15 +139,23 @@ def run_pipeline(
 
         # Golden model verification + fix loop
         if use_verify and module_spec.category == "modular_arithmetic":
+            verify_type = "modmul"  # modmul has A,B→R, works with standard testbench
+            verify_files = [str(file_path)]
+            # In modmul mode, the interface is fixed: R = (A*B) mod Q (no k-factor).
+            # Force clean params to avoid LLM-extracted K leaking into golden model.
+            if target_interface == "modmul":
+                verify_params = {"DATA_WIDTH": "12", "Q": "3329"}
+            else:
+                verify_params = module_spec.hardware_spec.parameters
             max_verify_rounds = 3
             for v_round in range(1, max_verify_rounds + 1):
                 console.print(f"       Golden model check (round {v_round}/{max_verify_rounds})...")
                 try:
                     passed, failures = verify_module(
-                        [str(file_path)],
+                        verify_files,
                         module_spec.module_name,
-                        "modmul",
-                        hardware_spec_params=module_spec.hardware_spec.parameters,
+                        verify_type,
+                        hardware_spec_params=verify_params,
                         num_vectors=4,
                     )
                 except ValueError as e:
@@ -159,7 +180,10 @@ def run_pipeline(
 
     # Stage 3: Integrate into complete butterfly
     bfly_path = None
-    if not use_integrate:
+    if target_interface == "modmul":
+        console.print("[yellow]--modmul: skipping butterfly integration (use reference butterfly).[/yellow]")
+        use_integrate = False
+    elif not use_integrate:
         console.print("[yellow]--no-integrate: skipping butterfly integration.[/yellow]")
     else:
         console.print(Panel.fit("[bold]Stage 3: Integrating into Butterfly[/bold]", style="blue"))
@@ -174,15 +198,28 @@ def run_pipeline(
         bfly_path = save_butterfly(butterfly, butterfly_dir)
         console.print(f"  Butterfly saved to: {bfly_path}")
 
-        # Vivado resource synthesis
-        if use_synth:
-            console.print(Panel.fit("[bold]Stage 3b: Resource Estimation (Vivado)[/bold]", style="blue"))
-            vfiles = list(modmul_paths) + [bfly_path]
-            run_synthesis(
-                [str(p) for p in vfiles],
-                top="butterfly",
-                output_dir=out_dir,
-            )
+    # Stage 3b: Vivado resource synthesis (runs for both --modmul and normal modes)
+    if use_synth and modmul_paths:
+        console.print(Panel.fit("[bold]Stage 3b: Resource Estimation (Vivado)[/bold]", style="blue"))
+        if target_interface == "modmul":
+            # --modmul mode: two synthesis runs
+            # Run 1: modmul alone
+            vfiles_modmul = [str(p) for p in modmul_paths]
+            run_synthesis(vfiles_modmul, top="modmul", output_dir=out_dir)
+
+            # Run 2: full butterfly (reference files + generated modmul)
+            ref_dir = project_root / "reference"
+            ref_files = ["butterfly.v", "div2.v", "modadd.v", "modsub.v"]
+            vfiles_bfly = [str(p) for p in modmul_paths]
+            for rf in ref_files:
+                rf_path = ref_dir / rf
+                if rf_path.exists():
+                    vfiles_bfly.append(str(rf_path))
+            run_synthesis(vfiles_bfly, top="butterfly", output_dir=out_dir)
+        else:
+            vfiles = [str(p) for p in modmul_paths] + [str(bfly_path)]
+            top_module = "butterfly"
+            run_synthesis(vfiles, top=top_module, output_dir=out_dir)
 
     console.print(f"\n[bold green]Done![/bold green] All outputs in: {out_dir}")
     return out_dir
@@ -233,6 +270,13 @@ def main():
         action="store_true",
         help="Skip Vivado resource synthesis",
     )
+    parser.add_argument(
+        "--modmul",
+        action="store_true",
+        help="Generate modmul module with fixed interface (clk,rst,A[11:0],B[11:0] -> R[11:0]). "
+             "Only the paper's reduction logic is generated; intmul + P_R register are fixed. "
+             "Implies --no-integrate --no-synth.",
+    )
 
     args = parser.parse_args()
 
@@ -251,6 +295,7 @@ def main():
             use_integrate=not args.no_integrate,
             use_verify=not args.no_verify,
             use_synth=not args.no_synth,
+            target_interface="modmul" if args.modmul else None,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")

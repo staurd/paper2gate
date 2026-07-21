@@ -129,10 +129,20 @@ def generate_verilog(
     module_spec: ModuleSpec,
     client: LLMClient,
     max_retries: int = 2,
+    target_interface: str | None = None,
 ) -> GeneratedModule:
-    """Generate a Verilog module from a hardware spec. No auto-fix loop."""
+    """Generate a Verilog module from a hardware spec. No auto-fix loop.
+
+    Args:
+        target_interface: If "modred", use the modred-specialized prompt
+                          that enforces the fixed modred interface.
+    """
     ctx = _spec_context(module_spec)
-    user_prompt = load_prompt("generate_verilog.jinja", **ctx)
+    if target_interface == "modmul":
+        prompt_name = "generate_modmul.jinja"
+    else:
+        prompt_name = "generate_verilog.jinja"
+    user_prompt = load_prompt(prompt_name, **ctx)
 
     base_system = (
         "You are a senior RTL design engineer. "
@@ -190,6 +200,7 @@ def generate_with_check(
     module_spec: ModuleSpec,
     client: LLMClient,
     max_rounds: int = 3,
+    target_interface: str | None = None,
 ) -> tuple[GeneratedModule, list[str]]:
     """
     Generate Verilog, then run an iverilog-check + LLM-fix loop.
@@ -197,7 +208,7 @@ def generate_with_check(
     Returns (final_module, error_logs).
     """
     console.print(f"    Generating [cyan]{module_spec.module_name}[/cyan]...")
-    module = generate_verilog(module_spec, client)
+    module = generate_verilog(module_spec, client, target_interface=target_interface)
     error_logs: list[str] = []
 
     for round_num in range(1, max_rounds + 1):

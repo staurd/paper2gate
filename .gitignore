@@ -5,6 +5,7 @@ outputs/
 .claude/
 .idea/
 xsim.dir/
+.Xil/
 xvlog.pb
 a.out
 *.vvp

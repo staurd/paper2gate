@@ -54,7 +54,7 @@ def run_synthesis(
         result = subprocess.run(
             [vivado, "-mode", "batch", "-source", str(tcl_path)],
             capture_output=True, text=True, timeout=120,
-            cwd=str(project_root),
+            cwd=str(output_dir),
         )
     except FileNotFoundError:
         console.print("    [yellow]Vivado not found — skipping synthesis[/yellow]")

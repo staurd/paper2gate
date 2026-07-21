@@ -1,0 +1,87 @@
+You are a senior RTL design engineer specializing in modular arithmetic for post-quantum cryptography. Generate a complete, synthesizable Verilog module for modular multiplication that implements the paper's innovative modular reduction algorithm.
+
+## CRITICAL: Fixed Module Interface and Structure
+
+The module interface and the multiplier front-end are NON-NEGOTIABLE. You MUST use exactly this skeleton and fill in the reduction logic:
+
+```verilog
+module modmul(
+    input         clk, rst,       // active-HIGH reset
+    input  [11:0] A, B,           // operands in [0, Q-1]
+    output [11:0] R               // R = (A * B) mod Q
+);
+
+    // ----- Fixed: DSP multiplier (do NOT modify) -----
+    (* use_dsp = "yes" *) reg [23:0] P_DSP;
+    always @* begin
+        P_DSP = A * B;
+    end
+
+    // ----- Fixed: product register (do NOT modify) -----
+    reg [23:0] P_R;
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            P_R <= 0;
+        else
+            P_R <= P_DSP;
+    end
+
+    // ================================================
+    // YOUR TASK: implement modular reduction below
+    // Compute R[11:0] = P_R[23:0] mod 3329
+    // The result must be in range [0, 3328].
+    // ================================================
+
+    // ... your reduction logic here ...
+
+endmodule
+```
+
+- **Module name**: `modmul` (exact)
+- **Ports**: `clk`, `rst`, `A[11:0]`, `B[11:0]` → `R[11:0]` — DO NOT change
+- **DSP multiplier (P_DSP) and product register (P_R)**: keep exactly as shown above, DO NOT modify
+- **Your job**: write the combinational logic that reduces `P_R[23:0]` to `R[11:0]` where R ≡ P_R (mod 3329) and 0 ≤ R < 3329
+
+
+## Paper's Innovation
+
+Implement the modular reduction algorithm described below. The reduction takes `P_R[23:0]` (the registered product) and outputs `R[11:0]`.
+
+### Summary
+{{summary}}
+
+### Algorithm Behavior
+{{behavior}}
+
+### Timing
+{{timing}}
+
+### Constraints
+{{constraints}}
+
+{% if parameters %}
+### Paper Parameters
+{% for name, desc in parameters.items() %}
+- {{name}}: {{desc}}
+{% endfor %}
+{% endif %}
+
+## Requirements
+
+1. Output the COMPLETE module from `module modmul(` to `endmodule`, including the fixed skeleton
+2. The fixed parts (DSP multiplier P_DSP, product register P_R) MUST be included verbatim as shown above
+3. Your reduction logic MUST produce R = P_R mod 3329 for all valid 24-bit inputs (P_R ≤ 3328×3328 = 11,075,584)
+4. The output R must be in range [0, 3328]
+5. **Synthesizable RTL** — no initial, forever, $finish, or testbench constructs
+6. **Self-contained** — do NOT instantiate external sub-modules for the reduction. Write the reduction logic inline.
+7. The reduction can be purely combinational (`assign` / `always @*`), since P_R is already registered
+8. **STRICTLY Verilog-2001**: NO `always_comb`, NO `logic` type, NO `N'(expr)` casts
+   - Combinational: use `always @*` or `assign`
+   - wire/reg: use `wire` or `reg`
+   - Sized constants: `localparam [N-1:0] NAME = VALUE;`
+9. Add brief inline comments explaining your reduction algorithm
+10. Keep the design compact and efficient
+
+## Output
+
+Return ONLY the Verilog code in a markdown code fence. No explanations. The code must start with `module modmul(` and end with `endmodule`.
