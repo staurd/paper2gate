@@ -84,12 +84,18 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
                 for p in port_list
             ]
 
+        try:
+            correction_factor = int(hw.get("correction_factor", 1))
+        except (TypeError, ValueError):
+            correction_factor = 1
+
         hardware_spec = HardwareSpec(
             parameters=hw.get("parameters", {}),
             ports=ports,
             behavior=hw.get("behavior", ""),
             timing=hw.get("timing", ""),
             constraints=hw.get("constraints", ""),
+            correction_factor=correction_factor,
         )
 
         innovations.append(ModuleSpec(

@@ -149,16 +149,23 @@ def verify_module(
     hardware_spec_params: dict | None = None,
     num_vectors: int = 4,
     latency: int = 3,
+    k_factor: int | None = None,
 ) -> tuple[bool, str]:
     """
     Verify a generated module against the golden model.
+
+    Args:
+        k_factor: Correction factor the module's output carries relative to a
+                  true a*b mod q. For K-reduction designs the module computes
+                  k*a*b mod q (Kyber: k=13). When given, this overrides any K
+                  parsed from hardware_spec_params. Pass 1 for plain a*b mod q.
 
     Returns (passed, failure_details).
     """
     params = parse_module_params(hardware_spec_params or {})
     dw = params["DATA_WIDTH"]
     q = params["Q"]
-    k = params["K"]
+    k = k_factor if k_factor is not None else params["K"]
 
     ports = scan_ports(verilog_files, module_name)
 

@@ -141,8 +141,13 @@ def run_pipeline(
         if use_verify and module_spec.category == "modular_arithmetic":
             verify_type = "modmul"  # modmul has A,B→R, works with standard testbench
             verify_files = [str(file_path)]
-            # In modmul mode, the interface is fixed: R = (A*B) mod Q (no k-factor).
-            # Force clean params to avoid LLM-extracted K leaking into golden model.
+            # The module's output may carry a constant factor k relative to a
+            # true a*b mod q. K-reduction designs (paper Algorithm 3) compute
+            # k*a*b mod q with k=13, cancelled in the NTT by pre-scaling twiddles
+            # with k^-1. The golden model MUST use the same k, or a faithful
+            # implementation is wrongly failed (and a plain `%` shortcut wrongly
+            # passes). correction_factor comes from Stage-1 extraction.
+            k_factor = module_spec.hardware_spec.correction_factor
             if target_interface == "modmul":
                 verify_params = {"DATA_WIDTH": "12", "Q": "3329"}
             else:
@@ -157,6 +162,7 @@ def run_pipeline(
                         verify_type,
                         hardware_spec_params=verify_params,
                         num_vectors=4,
+                        k_factor=k_factor,
                     )
                 except ValueError as e:
                     console.print(f"       [yellow]Golden model: {e} — skipping verification[/yellow]")

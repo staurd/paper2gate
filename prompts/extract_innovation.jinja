@@ -58,7 +58,8 @@ Return a JSON object with this exact structure:
         },
         "behavior": "Detailed cycle-by-cycle or combinational behavior description. Include: data flow, key computation steps, internal state if any, corner cases. Be precise enough that a hardware engineer could implement from this description alone.",
         "timing": "Latency in cycles, throughput, whether it's combinational/pipelined/multi-cycle",
-        "constraints": "Critical path considerations, area constraints, special technology requirements (DSP/BRAM usage)"
+        "constraints": "Critical path considerations, area constraints, special technology requirements (DSP/BRAM usage)",
+        "correction_factor": 1
       }
     }
   ]
@@ -73,6 +74,7 @@ Return a JSON object with this exact structure:
 4. If the paper proposes a modification to an existing structure, only capture the modified part (not the whole structure).
 5. Use the paper's exact parameter names and values where possible.
 6. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
+7. **correction_factor** — CRITICAL for modular multipliers. Some reduction algorithms do NOT output a true `a*b mod q`; they output `k*a*b mod q`, off by a known constant `k`. The classic case is K-reduction (Longa-Naehrig), where the modulus is written `q = k*2^x + 1` and the design computes `a*b*k mod q` (for Kyber, k=13). This factor is normally cancelled elsewhere in the NTT by pre-multiplying the twiddle factor by `k^-1 mod q`. Set `correction_factor` to that `k` (e.g. 13). If the algorithm produces a true `a*b mod q` with no such offset (Barrett, Montgomery-with-final-correction, plain schoolbook + reduction, LUT-only), set it to 1. Read the algorithm's stated Result/output carefully — if it says `r = a*b*k mod q`, the factor is k, not 1.
 
 {% if target_interface == "modmul" %}
 ## CRITICAL: Target Interface Constraint
@@ -83,13 +85,15 @@ This modular multiplication module MUST match the following interface exactly (i
 module modmul(
     input         clk, rst,   // active-HIGH reset
     input  [11:0] A, B,       // operands in [0, 3328]
-    output [11:0] R           // R = (A * B) mod 3329
+    output [11:0] R           // reduced product (see note on correction_factor)
 );
 ```
 
 The module has TWO parts:
 1. **Fixed front-end** (NOT your concern): DSP multiplier `(* use_dsp = "yes" *) reg [23:0] P_DSP; always @* P_DSP = A * B;` and a register `P_R <= P_DSP`. This is boilerplate — do NOT describe it.
-2. **Modular reduction** (YOUR focus): combinational logic that computes `R = P_R mod 3329`.
+2. **Modular reduction** (YOUR focus): combinational logic that reduces the 24-bit product P_R down to a 12-bit R.
+
+**Do NOT assume R = (A*B) mod 3329.** Report what the paper's algorithm ACTUALLY outputs. Many efficient designs (K-reduction and its variants) output `R = k*A*B mod 3329` — off by a constant `k` (e.g. 13) that the NTT cancels by pre-scaling twiddles with `k^-1`. Set `correction_factor` accordingly (see Rule 7). Describe the reduction faithfully, including the k factor if present; do not force-fit it to a plain `A*B mod q`.
 
 **Apply these constraints to EVERY modular_arithmetic innovation you extract:**
 

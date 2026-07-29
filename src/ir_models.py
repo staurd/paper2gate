@@ -16,6 +16,10 @@ class HardwareSpec(BaseModel):
     behavior: str = ""
     timing: str = ""
     constraints: str = ""
+    # Constant factor the module's output is off by, relative to a true a*b mod q.
+    # K-reduction computes k*a*b mod q (k=13 for Kyber), cancelled in the NTT by
+    # pre-scaling twiddles with k^-1. Barrett/Montgomery/plain reduction => 1.
+    correction_factor: int = 1
 
 
 class ModuleSpec(BaseModel):
