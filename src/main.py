@@ -231,11 +231,34 @@ def run_pipeline(
     return out_dir
 
 
+def expand_pdf_paths(pdf_args: list[str]) -> list[str]:
+    """Expand directory arguments into the PDF files they contain.
+
+    Directories expand to their sorted *.pdf contents; explicit file
+    arguments keep their given position.
+    """
+    expanded: list[str] = []
+    for arg in pdf_args:
+        p = Path(arg)
+        if p.is_dir():
+            pdfs = sorted(str(f) for f in p.glob("*.pdf"))
+            if not pdfs:
+                console.print(f"[yellow]Warning: no PDFs found in directory: {arg}[/yellow]")
+            expanded.extend(pdfs)
+        else:
+            expanded.append(arg)
+    return expanded
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Paper2Gate — Generate Verilog from academic papers using LLM",
     )
-    parser.add_argument("pdf", help="Path to the PDF paper")
+    parser.add_argument(
+        "pdf", nargs="+",
+        help="Path to the PDF paper. Multiple papers (or directories of PDFs) "
+             "are processed sequentially; one failing paper does not stop the rest.",
+    )
     parser.add_argument(
         "-c", "--config",
         default="config.yaml",
@@ -286,30 +309,60 @@ def main():
 
     args = parser.parse_args()
 
-    if not os.path.exists(args.pdf):
-        console.print(f"[red]Error: PDF not found: {args.pdf}[/red]")
+    pdfs = expand_pdf_paths(args.pdf)
+    if not pdfs:
+        console.print("[red]Error: no PDFs to process.[/red]")
         sys.exit(1)
 
-    try:
-        out_dir = run_pipeline(
-            pdf_path=args.pdf,
-            config_path=args.config,
-            output_base=args.output,
-            module_filter=args.module,
-            dry_run=args.dry_run,
-            use_review=not args.no_review,
-            use_integrate=not args.no_integrate,
-            use_verify=not args.no_verify,
-            use_synth=not args.no_synth,
-            target_interface="modmul" if args.modmul else None,
-        )
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Interrupted by user[/yellow]")
-        sys.exit(0)
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        console.print_exception()
+    missing = [p for p in pdfs if not os.path.exists(p)]
+    if missing:
+        console.print("[red]Error: PDF not found:[/red] " + ", ".join(missing))
         sys.exit(1)
+
+    results: list[tuple[str, str | None, str | None]] = []  # (paper, out_dir, error)
+    for i, pdf in enumerate(pdfs, 1):
+        console.print(
+            Panel.fit(f"[bold]Paper {i}/{len(pdfs)}: {pdf}[/bold]", style="cyan")
+        )
+        try:
+            out_dir = run_pipeline(
+                pdf_path=pdf,
+                config_path=args.config,
+                output_base=args.output,
+                module_filter=args.module,
+                dry_run=args.dry_run,
+                use_review=not args.no_review,
+                use_integrate=not args.no_integrate,
+                use_verify=not args.no_verify,
+                use_synth=not args.no_synth,
+                target_interface="modmul" if args.modmul else None,
+            )
+            results.append((pdf, str(out_dir), None))
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted by user[/yellow]")
+            sys.exit(0)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            results.append((pdf, None, str(e)))
+
+    # Batch summary
+    table = Table(title="Batch Results", show_header=True)
+    table.add_column("#", justify="right")
+    table.add_column("Paper", overflow="fold")
+    table.add_column("Status")
+    table.add_column("Outputs")
+    for i, (paper, out_dir, err) in enumerate(results, 1):
+        if err:
+            table.add_row(str(i), paper, "[red]FAILED[/red]", f"[red]{err}[/red]")
+        else:
+            table.add_row(str(i), paper, "[green]OK[/green]", out_dir or "")
+    console.print(table)
+
+    ok = sum(1 for _, _, e in results if e is None)
+    failed = len(results) - ok
+    console.print(f"[bold green]{ok}/{len(results)} papers OK[/bold green]" +
+                  (f", [bold red]{failed} failed[/bold red]" if failed else ""))
+    sys.exit(0 if failed == 0 else 1)
 
 
 if __name__ == "__main__":
