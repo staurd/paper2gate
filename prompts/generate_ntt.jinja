@@ -106,3 +106,10 @@ Pipeline controller state to match butterfly latency. Use a shift register of ap
 4. Use parameters for DATA_WIDTH and Q
 5. Add comments explaining the NTT stage/address generation
 6. Respond ONLY with Verilog code inside a markdown code fence
+
+## Resource-Efficient Coding
+- Every numeric literal MUST have an explicit bit width (e.g. `12'd3329`, not `3329`). Unsized constants default to 32 bits and force unnecessary widening.
+- Declare intermediate signals with the narrowest width that cannot overflow. Use mathematical range, not 32-bit defaults.
+- Conditional modular reduction: `val - (val >= Q ? Q : 0)` or MUX-at-input style (`val + (borrow ? Q : 0)`), not a full-width MUX between two pre-computed results.
+- NO `/` or `%` — use conditional subtract for mod_reduce, not `val % Q`.
+- NO `integer` in the datapath — use sized `wire`/`reg`.

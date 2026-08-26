@@ -39,6 +39,37 @@ The output MUST start with `module` and end with `endmodule`. This is non-negoti
   - NO `N'(expr)` size casts — for fixed-width constants, declare a `localparam [N-1:0] NAME = VALUE;` and use that
   - NO `$error`, `$warning`, or other SystemVerilog system functions
 
+## Resource-Efficient Coding
+
+### Sized constants (non-negotiable)
+Every numeric literal MUST carry an explicit bit width. Unsized constants default to 32 bits and force the synthesizer to widen surrounding arithmetic, adding LUTs and CARRY4 stages.
+```
+wire [11:0] s = a + 12'd3329;   // good
+wire [11:0] s = a + 3329;       // bad — 32-bit constant widens everything
+```
+
+### Control intermediate bit widths
+Declare intermediate wires/regs with the narrowest width that cannot overflow. Let the mathematics determine the bound; don't blindly use [31:0] or inherit 32-bit defaults.
+```
+wire [18:0] sum = {1'b0, data[17:0]} + {7'b0, lut_val};  // good
+wire [31:0] sum = data[17:0] + lut_val;                   // bad
+```
+
+### Share repeated sub-expressions
+If the same complex expression appears in multiple assigns, extract it into one named `wire`. This prevents the synthesizer from duplicating the hardware. (Exception: a very small fan-out gain doesn't justify adding a wire if timing, not area, is the bottleneck.)
+```
+wire [10:0] five_low = {3'b0, low} + {1'b0, low, 2'b0};  // 5*low — compute once
+```
+
+### No `integer` in the datapath
+`integer` is 32-bit signed. Use explicitly-sized `wire` or `reg` for all hardware paths. `integer` is acceptable only as `genvar` or inside a combinational function where the return is sized.
+
+### Clock enable preferred over feedback MUX
+For registers with an enable condition, use the `if (en)` pattern, which maps to the flip-flop CE pin. Avoid `q <= en ? d : q` — it creates a feedback MUX.
+```
+// good: if (en) q <= d;          // bad: q <= en ? d : q;
+```
+
 ## Hardware Specification
 
 Module Name: {{module_name}}

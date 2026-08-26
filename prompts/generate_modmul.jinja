@@ -74,13 +74,66 @@ Implement the modular reduction algorithm described below. The reduction takes `
 4. The output R must be in range [0, 3328]
 5. **Synthesizable RTL** — no initial, forever, $finish, or testbench constructs
 6. **Self-contained** — do NOT instantiate external sub-modules for the reduction. Write the reduction logic inline.
-7. The reduction can be purely combinational (`assign` / `always @*`), since P_R is already registered
+7. **Reduction is combinational** (P_R is already registered). The reduction must produce R within ONE clock cycle after P_R is valid — there is no further register stage in the fixed skeleton. Use `assign` / `always @*`.
 8. **STRICTLY Verilog-2001**: NO `always_comb`, NO `logic` type, NO `N'(expr)` casts
    - Combinational: use `always @*` or `assign`
    - wire/reg: use `wire` or `reg`
    - Sized constants: `localparam [N-1:0] NAME = VALUE;`
 9. Add brief inline comments explaining your reduction algorithm
-10. Keep the design compact and efficient
+10. Follow the **Area-Efficient Coding Rules** below
+
+## Area-Efficient Coding Rules for Modular Reduction
+
+These rules directly affect FPGA resource usage (LUTs, CARRY4 chains, DSP absorption). Follow them strictly — a functionally correct implementation that ignores them can be 20%+ larger than necessary.
+
+### Sized constants
+Every numeric literal MUST have an explicit bit width that matches its context. Unsized constants default to 32 bits and force the synthesizer to widen surrounding logic.
+```
+// GOOD:                                         // BAD:
+wire [12:0] s = a + 13'd3329;                    wire [12:0] s = a + 3329;   // 32-bit constant
+wire [11:0] q = 12'd3329;                        wire [11:0] q = 3329;
+```
+
+### Conditional add / subtract: put the MUX at the INPUT of the adder
+Select the addend (0 or Q) based on the sign/borrow bit, then do ONE addition. Never compute `x+Q` in full and then MUX between `x+Q` and `x` — that duplicates a 12-bit adder and creates a 12-bit wide MUX.
+```
+// GOOD:                                         // BAD:
+wire [11:0] addend = sign ? 12'd3329 : 12'd0;    assign R = sign ? (x + 12'd3329) : x;
+assign R = x[11:0] + addend;
+```
+
+### Fold constant-multiplication shifts into adjacent arithmetic
+When the algorithm multiplies by a small constant (e.g. ×13 = ×8 + ×4 + ×1), do NOT create a standalone intermediate wire holding the full `13*x` result. Instead, push the shift terms directly into the surrounding additions/subtractions so the synthesizer can merge them with the carry chain.
+```
+// GOOD:                                         // BAD:
+// K-RED = 13*low - high, no materialised 13*low
+wire [13:0] part_hi = {3'b0,low,3'b0} - {3'b0,high};   // 8*low - high
+wire [10:0] part_lo = {3'b0,low} + {1'b0,low,2'b0};     // 5*low
+wire [13:0] diff   = part_hi + {3'b0,part_lo};           // 13*low - high
+                                                        wire [11:0] temp = (low<<2)+(low<<3)+low; // 13*low
+                                                        wire [12:0] diff = {1'b0,temp} - {2'b0,high};
+```
+
+### Range checks: use sign bits and borrow flags, not comparators
+After a signed subtraction whose result is in [-Q, Q), the sign bit (MSB) alone tells you whether to add Q — you don't need `if (result < 0)` or `if (result >= Q)` which instantiate a separate comparator.
+```
+// GOOD:                                         // BAD:
+assign R = diff[12] ? (diff[11:0]+12'd3329)      if (diff < 0) ...
+                : diff[11:0];                     if (result >= 12'd3329) ...
+```
+
+### Control intermediate bit widths
+Every intermediate signal should be declared with the narrowest width that cannot overflow, based on the mathematical range at that point, not a generic 32-bit wire. Over-wide intermediates waste LUTs and carry-chain stages.
+```
+// GOOD:                                         // BAD:
+wire [18:0] sum = {1'b0,data[17:0]} + {7'b0,y};  wire [31:0] sum = data[17:0] + y;
+```
+
+### NO `/` or `%` operators
+Never use the Verilog divide or modulo operators. Modular reduction MUST use the paper's algorithm (LUT, K-reduction, Barrett, Montgomery, conditional subtract chain) — never `assign R = P_R % 3329`.
+
+### NO `integer` in the datapath
+`integer` is 32-bit signed. Use explicitly-sized `wire` or `reg` for all hardware signals. `integer` is acceptable ONLY as a `genvar` or a loop index inside a `function`; even then prefer sized types.
 
 ## Output
 
