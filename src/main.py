@@ -19,8 +19,10 @@ from src.code_generator import (
 )
 from src.innovation_extractor import extract_innovations, save_specs
 from src.integration_generator import generate_butterfly, save_butterfly
+from src.ir_models import parse_module_params
 from src.llm_client import LLMClient
 from src.pdf_parser import extract_text
+from src.schemes import resolve_scheme
 from src.verification_runner import verify_module
 from src.vivado_report import run_synthesis
 
@@ -45,6 +47,7 @@ def run_pipeline(
     use_verify: bool = True,
     use_synth: bool = True,
     target_interface: str | None = None,
+    scheme: str | None = None,
 ) -> Path:
     """Run the full paper-to-Verilog pipeline.
 
@@ -54,6 +57,10 @@ def run_pipeline(
                           intmul+P_R front-end is fixed; only the modular
                           reduction logic is generated from the paper.
                           Auto-skips butterfly integration.
+        scheme: "auto" (detect from paper text), "kyber", or "dilithium".
+                Drives the operand widths/modulus rendered into the prompts,
+                golden-model verification parameters, and Stage 3b reference
+                file selection.
     """
     project_root = Path(__file__).parent.parent
 
@@ -76,13 +83,21 @@ def run_pipeline(
     text_dir.mkdir(parents=True, exist_ok=True)
     (text_dir / "full_text.txt").write_text(paper_text, encoding="utf-8")
 
+    # Resolve the PQC scheme profile (drives prompt rendering + verification)
+    profile = resolve_scheme(scheme, paper_text)
+    console.print(
+        f"  Detected scheme: [cyan]{profile.name}[/cyan] "
+        f"(q={profile.q}, DATA_WIDTH={profile.data_width}, "
+        f"latency default={profile.default_latency})"
+    )
+
     # Init LLM client
     client = LLMClient(config_path)
 
     # Stage 1: Extract innovations
     console.print(Panel.fit("[bold]Stage 1: Extracting Innovations[/bold]", style="blue"))
     with console.status("Analyzing paper with LLM (this may take 30-60s)..."):
-        analysis = extract_innovations(paper_text, client, target_interface=target_interface)
+        analysis = extract_innovations(paper_text, client, target_interface=target_interface, scheme=profile)
 
     spec_path = save_specs(analysis, out_dir)
     console.print(f"  Found [green]{len(analysis.innovations)}[/green] innovations")
@@ -126,11 +141,13 @@ def run_pipeline(
             if use_review:
                 result, error_logs = generate_with_check(
                     module_spec, client, target_interface=target_interface,
+                    scheme=profile,
                 )
                 save_error_logs(error_logs, module_spec.module_name, review_dir)
             else:
                 result = generate_verilog(
                     module_spec, client, target_interface=target_interface,
+                    scheme=profile,
                 )
 
         file_path = save_verilog(result, verilog_dir)
@@ -149,9 +166,39 @@ def run_pipeline(
             # passes). correction_factor comes from Stage-1 extraction.
             k_factor = module_spec.hardware_spec.correction_factor
             if target_interface == "modmul":
-                verify_params = {"DATA_WIDTH": "12", "Q": "3329"}
+                # The profile's constants are cryptographic ground truth. The
+                # extracted spec should agree; if the LLM invented other
+                # widths, warn and verify against the profile anyway.
+                raw_params = module_spec.hardware_spec.parameters
+                parsed = parse_module_params(raw_params)
+                has_dw = any(
+                    k.upper() in ("DATA_WIDTH", "WIDTH", "N_BITS", "DW")
+                    for k in raw_params
+                )
+                has_q = any(
+                    k.upper() in ("Q", "MODULUS", "MODULUS_Q", "MOD")
+                    for k in raw_params
+                )
+                if (has_dw and parsed["DATA_WIDTH"] != profile.data_width) or \
+                   (has_q and parsed["Q"] != profile.q):
+                    console.print(
+                        f"       [yellow]Warning: extracted DATA_WIDTH/Q "
+                        f"({parsed['DATA_WIDTH']}/{parsed['Q']}) conflicts with "
+                        f"scheme {profile.name} ({profile.data_width}/{profile.q}) "
+                        f"— using scheme values[/yellow]"
+                    )
+                verify_params = {
+                    "DATA_WIDTH": str(profile.data_width),
+                    "Q": str(profile.q),
+                }
+                # Latency from the extracted spec (capped against nonsense),
+                # falling back to the scheme default. The testbench samples a
+                # 3-cycle window, absorbing off-by-one extraction errors.
+                lc = module_spec.hardware_spec.latency_cycles
+                latency = lc if 0 < lc <= 32 else profile.default_latency
             else:
                 verify_params = module_spec.hardware_spec.parameters
+                latency = 3
             max_verify_rounds = 3
             for v_round in range(1, max_verify_rounds + 1):
                 console.print(f"       Golden model check (round {v_round}/{max_verify_rounds})...")
@@ -162,6 +209,7 @@ def run_pipeline(
                         verify_type,
                         hardware_spec_params=verify_params,
                         num_vectors=4,
+                        latency=latency,
                         k_factor=k_factor,
                     )
                 except ValueError as e:
@@ -189,6 +237,12 @@ def run_pipeline(
     if target_interface == "modmul":
         console.print("[yellow]--modmul: skipping butterfly integration (use reference butterfly).[/yellow]")
         use_integrate = False
+    elif not profile.integrate:
+        console.print(
+            f"[yellow]Stage 3 skipped: butterfly integration is Kyber-only "
+            f"(detected scheme: {profile.name}).[/yellow]"
+        )
+        use_integrate = False
     elif not use_integrate:
         console.print("[yellow]--no-integrate: skipping butterfly integration.[/yellow]")
     else:
@@ -208,24 +262,35 @@ def run_pipeline(
     if use_synth and modmul_paths:
         console.print(Panel.fit("[bold]Stage 3b: Resource Estimation (Vivado)[/bold]", style="blue"))
         if target_interface == "modmul":
-            # --modmul mode: two synthesis runs
-            # Run 1: modmul alone
+            # --modmul mode: run 1 synthesizes the modmul alone, run 2 (where
+            # the scheme has reference files) the full butterfly with the
+            # reference design + generated modmul.
             vfiles_modmul = [str(p) for p in modmul_paths]
             run_synthesis(vfiles_modmul, top="modmul", output_dir=out_dir)
 
-            # Run 2: full butterfly (reference files + generated modmul)
-            ref_dir = project_root / "reference"
-            ref_files = ["butterfly.v", "div2.v", "modadd.v", "modsub.v"]
-            vfiles_bfly = [str(p) for p in modmul_paths]
-            for rf in ref_files:
-                rf_path = ref_dir / rf
-                if rf_path.exists():
-                    vfiles_bfly.append(str(rf_path))
-            run_synthesis(vfiles_bfly, top="butterfly", output_dir=out_dir)
+            if profile.reference_files:
+                ref_dir = project_root / "reference"
+                vfiles_bfly = [str(p) for p in modmul_paths]
+                for rf in profile.reference_files:
+                    rf_path = ref_dir / rf
+                    if rf_path.exists():
+                        vfiles_bfly.append(str(rf_path))
+                run_synthesis(vfiles_bfly, top="butterfly", output_dir=out_dir)
+            else:
+                console.print(
+                    f"    [yellow]No reference butterfly files for {profile.name} "
+                    f"— modmul-only synthesis.[/yellow]"
+                )
         else:
-            vfiles = [str(p) for p in modmul_paths] + [str(bfly_path)]
-            top_module = "butterfly"
-            run_synthesis(vfiles, top=top_module, output_dir=out_dir)
+            if bfly_path is None:
+                console.print(
+                    f"    [yellow]No butterfly generated (scheme: {profile.name}) "
+                    f"— skipping butterfly synthesis.[/yellow]"
+                )
+            else:
+                vfiles = [str(p) for p in modmul_paths] + [str(bfly_path)]
+                top_module = "butterfly"
+                run_synthesis(vfiles, top=top_module, output_dir=out_dir)
 
     console.print(f"\n[bold green]Done![/bold green] All outputs in: {out_dir}")
     return out_dir
@@ -302,9 +367,18 @@ def main():
     parser.add_argument(
         "--modmul",
         action="store_true",
-        help="Generate modmul module with fixed interface (clk,rst,A[11:0],B[11:0] -> R[11:0]). "
-             "Only the paper's reduction logic is generated; intmul + P_R register are fixed. "
-             "Implies --no-integrate --no-synth.",
+        help="Generate a modmul module with the scheme's fixed interface (clk,rst,A,B -> R). "
+             "Only the paper's reduction logic is generated; the DSP multiply + P_R "
+             "register front-end are fixed. Butterfly integration is skipped; Vivado "
+             "synthesis still runs for the modmul itself (plus the Kyber reference "
+             "butterfly when reference files exist) unless --no-synth.",
+    )
+    parser.add_argument(
+        "--scheme",
+        choices=["auto", "kyber", "dilithium"],
+        default="auto",
+        help="PQC scheme profile (default: auto-detect from paper text; "
+             "applies to all papers in a batch)",
     )
 
     args = parser.parse_args()
@@ -336,6 +410,7 @@ def main():
                 use_verify=not args.no_verify,
                 use_synth=not args.no_synth,
                 target_interface="modmul" if args.modmul else None,
+                scheme=args.scheme,
             )
             results.append((pdf, str(out_dir), None))
         except KeyboardInterrupt:

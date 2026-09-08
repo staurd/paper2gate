@@ -6,6 +6,7 @@ from pathlib import Path
 from src.ir_models import HardwareSpec, ModuleSpec, PaperAnalysis, PortSpec
 from src.llm_client import LLMClient
 from src.prompt_manager import load_prompt
+from src.schemes import KYBER, SchemeProfile, render_vars
 
 
 def extract_innovations(
@@ -14,6 +15,7 @@ def extract_innovations(
     max_chars: int = 50000,
     max_retries: int = 2,
     target_interface: str | None = None,
+    scheme: SchemeProfile | None = None,
 ) -> PaperAnalysis:
     """
     Extract innovative hardware modules from paper text.
@@ -24,12 +26,17 @@ def extract_innovations(
     Args:
         target_interface: If "modred", add target interface constraint
                           so extracted ports match the reference modred.v.
+        scheme: PQC scheme profile. Renders the fixed-interface constants
+                (operand widths, modulus) into the prompt. Defaults to KYBER
+                for backward compatibility with direct callers.
     """
     truncated = paper_text[:max_chars]
+    profile = scheme or KYBER
     user_prompt = load_prompt(
         "extract_innovation.jinja",
         paper_text=truncated,
         target_interface=target_interface,
+        **render_vars(profile),
     )
 
     system_prompt = (
@@ -89,6 +96,11 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
         except (TypeError, ValueError):
             correction_factor = 1
 
+        try:
+            latency_cycles = int(hw.get("latency_cycles", 0))
+        except (TypeError, ValueError):
+            latency_cycles = 0
+
         hardware_spec = HardwareSpec(
             parameters=hw.get("parameters", {}),
             ports=ports,
@@ -96,6 +108,7 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
             timing=hw.get("timing", ""),
             constraints=hw.get("constraints", ""),
             correction_factor=correction_factor,
+            latency_cycles=latency_cycles,
         )
 
         innovations.append(ModuleSpec(

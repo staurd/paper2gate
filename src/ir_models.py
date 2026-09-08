@@ -20,6 +20,10 @@ class HardwareSpec(BaseModel):
     # K-reduction computes k*a*b mod q (k=13 for Kyber), cancelled in the NTT by
     # pre-scaling twiddles with k^-1. Barrett/Montgomery/plain reduction => 1.
     correction_factor: int = 1
+    # Total clock cycles from valid A/B at the inputs to valid R at the output,
+    # counting EVERY register stage including the product register.
+    # 0 = unknown (the pipeline applies the scheme's default latency).
+    latency_cycles: int = 0
 
 
 class ModuleSpec(BaseModel):

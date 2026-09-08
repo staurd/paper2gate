@@ -59,7 +59,8 @@ Return a JSON object with this exact structure:
         "behavior": "Detailed cycle-by-cycle or combinational behavior description. Include: data flow, key computation steps, internal state if any, corner cases. Be precise enough that a hardware engineer could implement from this description alone.",
         "timing": "Latency in cycles, throughput, whether it's combinational/pipelined/multi-cycle",
         "constraints": "Critical path considerations, area constraints, special technology requirements (DSP/BRAM usage)",
-        "correction_factor": 1
+        "correction_factor": 1,
+        "latency_cycles": 0
       }
     }
   ]
@@ -75,6 +76,7 @@ Return a JSON object with this exact structure:
 5. Use the paper's exact parameter names and values where possible.
 6. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
 7. **correction_factor** — CRITICAL for modular multipliers. Some reduction algorithms do NOT output a true `a*b mod q`; they output `k*a*b mod q`, off by a known constant `k`. The classic case is K-reduction (Longa-Naehrig), where the modulus is written `q = k*2^x + 1` and the design computes `a*b*k mod q` (for Kyber, k=13). This factor is normally cancelled elsewhere in the NTT by pre-multiplying the twiddle factor by `k^-1 mod q`. Set `correction_factor` to that `k` (e.g. 13). If the algorithm produces a true `a*b mod q` with no such offset (Barrett, Montgomery-with-final-correction, plain schoolbook + reduction, LUT-only), set it to 1. Read the algorithm's stated Result/output carefully — if it says `r = a*b*k mod q`, the factor is k, not 1.
+8. **latency_cycles** — for modular_arithmetic modules: the total number of clock cycles from when valid A/B appear at the module inputs to when R is valid at the output, counting EVERY register stage in the datapath INCLUDING the product register. Purely combinational reduction after the product register => latency_cycles = 1. A pipelined reduction with N register stages after P_R => latency_cycles = 1 + N. If unknown, set 0 (the pipeline applies a scheme default).
 
 {% if target_interface == "modmul" %}
 ## CRITICAL: Target Interface Constraint
@@ -84,25 +86,25 @@ This modular multiplication module MUST match the following interface exactly (i
 ```verilog
 module modmul(
     input         clk, rst,   // active-HIGH reset
-    input  [11:0] A, B,       // operands in [0, 3328]
-    output [11:0] R           // reduced product (see note on correction_factor)
+    input  [{{dw_minus_1}}:0] A, B,       // operands in [0, {{q_minus_1}}]
+    output [{{dw_minus_1}}:0] R           // reduced product (see note on correction_factor)
 );
 ```
 
 The module has TWO parts:
-1. **Fixed front-end** (NOT your concern): DSP multiplier `(* use_dsp = "yes" *) reg [23:0] P_DSP; always @* P_DSP = A * B;` and a register `P_R <= P_DSP`. This is boilerplate — do NOT describe it.
-2. **Modular reduction** (YOUR focus): combinational logic that reduces the 24-bit product P_R down to a 12-bit R.
+1. **Fixed front-end** (NOT your concern): DSP multiplier `(* use_dsp = "yes" *) reg [{{pw_minus_1}}:0] P_DSP; always @* P_DSP = A * B;` and a register `P_R <= P_DSP`. This is boilerplate — do NOT describe it.
+2. **Modular reduction** (YOUR focus): logic that reduces the {{pw}}-bit product P_R down to a {{dw}}-bit R. **The reduction MAY be pipelined**: if the paper's design inserts register stages inside the reduction, describe those stages and their per-stage arithmetic faithfully — the generated Verilog will reproduce them. Do NOT invent extra pipeline stages that are not in the paper, and do NOT strip out stages the paper specifies.
 
-**Do NOT assume R = (A*B) mod 3329.** Report what the paper's algorithm ACTUALLY outputs. Many efficient designs (K-reduction and its variants) output `R = k*A*B mod 3329` — off by a constant `k` (e.g. 13) that the NTT cancels by pre-scaling twiddles with `k^-1`. Set `correction_factor` accordingly (see Rule 7). Describe the reduction faithfully, including the k factor if present; do not force-fit it to a plain `A*B mod q`.
+**Do NOT assume R = (A*B) mod {{q}}.** Report what the paper's algorithm ACTUALLY outputs. Many efficient designs (K-reduction and its variants) output `R = k*A*B mod {{q}}` — off by a constant `k` (e.g. 13) that the NTT cancels by pre-scaling twiddles with `k^-1`. Set `correction_factor` accordingly (see Rule 7). Describe the reduction faithfully, including the k factor if present; do not force-fit it to a plain `A*B mod q`.
 
 **Apply these constraints to EVERY modular_arithmetic innovation you extract:**
 
 1. **Module name**: MUST be `modmul`
-2. **Input ports**: `clk`, `rst`, `A[11:0]`, `B[11:0]` — exactly these names and widths
-3. **Output port**: `R[11:0]` — only this one output
-4. **Parameters**: Only include parameters relevant to the reduction algorithm (e.g., internal constants). Do NOT parameterize DATA_WIDTH or Q — these are fixed at 12-bit operands, Q=3329.
-5. **Focus**: Describe ONLY the modular reduction algorithm that maps P_R[23:0] → R[11:0]. Do NOT describe the DSP multiplier (P_DSP) or the product register — those are fixed boilerplate.
-6. **Context**: The 24-bit product P_R arrives from the DSP multiplier after 1 register stage. Your reduction logic reads P_R and produces R.
+2. **Input ports**: `clk`, `rst`, `A[{{dw_minus_1}}:0]`, `B[{{dw_minus_1}}:0]` — exactly these names and widths
+3. **Output port**: `R[{{dw_minus_1}}:0]` — only this one output
+4. **Parameters**: Only include parameters relevant to the reduction algorithm (e.g., internal constants). Do NOT parameterize DATA_WIDTH or Q — these are fixed at {{dw}}-bit operands, Q={{q}}.
+5. **Focus**: Describe ONLY the modular reduction algorithm that maps P_R[{{pw_minus_1}}:0] → R[{{dw_minus_1}}:0]. Do NOT describe the DSP multiplier (P_DSP) or the product register — those are fixed boilerplate.
+6. **Context**: The {{pw}}-bit product P_R arrives from the DSP multiplier after 1 register stage. Your reduction logic reads P_R and produces R. Report the reduction's internal pipeline stages (if any) under `latency_cycles` (Rule 8).
 {% endif %}
 
 ## Paper text

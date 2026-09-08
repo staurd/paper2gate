@@ -54,13 +54,35 @@ def _gen_modmul_testbench(
         tests.append(f"        // Test {i}: a={v['a']}, b={v['b']} -> {expected}")
         tests.append(f"        {in_a} = {dw}'d{v['a']}; {in_b} = {dw}'d{v['b']};")
         tests.append(f"        {clk_wait}")
-        tests.append(f"        if ({out_r} !== {dw}'d{expected}) begin")
-        tests.append(f'            $display("FAIL[{i}]: a=%d b=%d got=%d expected={expected}", '
-                     f'{in_a}, {in_b}, {out_r});')
-        tests.append(f"            errors = errors + 1;")
-        tests.append(f"        end else begin")
-        tests.append(f'            $display("PASS[{i}]");')
-        tests.append(f"        end")
+        if ports["has_clk"]:
+            # 3-sample window: the extracted latency can be off by a cycle or
+            # two. Over-waiting is safe because the next inputs are applied
+            # only after this check. Fail only if ALL three samples mismatch.
+            tests.append(f"        if ({out_r} !== {dw}'d{expected}) begin")
+            tests.append(f"            @(posedge clk);")
+            tests.append(f"            if ({out_r} !== {dw}'d{expected}) begin")
+            tests.append(f"                @(posedge clk);")
+            tests.append(f"                if ({out_r} !== {dw}'d{expected}) begin")
+            tests.append(f'                    $display("FAIL[{i}]: a=%d b=%d got=%d expected={expected}", '
+                         f'{in_a}, {in_b}, {out_r});')
+            tests.append(f"                    errors = errors + 1;")
+            tests.append(f"                end else begin")
+            tests.append(f'                    $display("PASS[{i}]");')
+            tests.append(f"                end")
+            tests.append(f"            end else begin")
+            tests.append(f'                $display("PASS[{i}]");')
+            tests.append(f"            end")
+            tests.append(f"        end else begin")
+            tests.append(f'            $display("PASS[{i}]");')
+            tests.append(f"        end")
+        else:
+            tests.append(f"        if ({out_r} !== {dw}'d{expected}) begin")
+            tests.append(f'            $display("FAIL[{i}]: a=%d b=%d got=%d expected={expected}", '
+                         f'{in_a}, {in_b}, {out_r});')
+            tests.append(f"            errors = errors + 1;")
+            tests.append(f"        end else begin")
+            tests.append(f'            $display("PASS[{i}]");')
+            tests.append(f"        end")
 
     test_body = "\n".join(tests)
     dwm1 = dw - 1

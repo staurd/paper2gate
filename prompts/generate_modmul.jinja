@@ -7,18 +7,18 @@ The module interface and the multiplier front-end are NON-NEGOTIABLE. You MUST u
 ```verilog
 module modmul(
     input         clk, rst,       // active-HIGH reset
-    input  [11:0] A, B,           // operands in [0, Q-1]
-    output [11:0] R               // R = (A * B) mod Q
+    input  [{{dw_minus_1}}:0] A, B,       // operands in [0, {{q_minus_1}}]
+    output [{{dw_minus_1}}:0] R           // R = (A * B) mod {{q}}
 );
 
     // ----- Fixed: DSP multiplier (do NOT modify) -----
-    (* use_dsp = "yes" *) reg [23:0] P_DSP;
+    (* use_dsp = "yes" *) reg [{{pw_minus_1}}:0] P_DSP;
     always @* begin
         P_DSP = A * B;
     end
 
     // ----- Fixed: product register (do NOT modify) -----
-    reg [23:0] P_R;
+    reg [{{pw_minus_1}}:0] P_R;
     always @(posedge clk or posedge rst) begin
         if (rst)
             P_R <= 0;
@@ -28,8 +28,8 @@ module modmul(
 
     // ================================================
     // YOUR TASK: implement modular reduction below
-    // Compute R[11:0] = P_R[23:0] mod 3329
-    // The result must be in range [0, 3328].
+    // Compute R[{{dw_minus_1}}:0] = P_R[{{pw_minus_1}}:0] mod {{q}}
+    // The result must be in range [0, {{q_minus_1}}].
     // ================================================
 
     // ... your reduction logic here ...
@@ -38,14 +38,14 @@ endmodule
 ```
 
 - **Module name**: `modmul` (exact)
-- **Ports**: `clk`, `rst`, `A[11:0]`, `B[11:0]` → `R[11:0]` — DO NOT change
+- **Ports**: `clk`, `rst`, `A[{{dw_minus_1}}:0]`, `B[{{dw_minus_1}}:0]` → `R[{{dw_minus_1}}:0]` — DO NOT change
 - **DSP multiplier (P_DSP) and product register (P_R)**: keep exactly as shown above, DO NOT modify
-- **Your job**: write the combinational logic that reduces `P_R[23:0]` to `R[11:0]` where R ≡ P_R (mod 3329) and 0 ≤ R < 3329
+- **Your job**: write the reduction logic that reduces `P_R[{{pw_minus_1}}:0]` to `R[{{dw_minus_1}}:0]` where R ≡ P_R (mod {{q}}) and 0 ≤ R < {{q}}
 
 
 ## Paper's Innovation
 
-Implement the modular reduction algorithm described below. The reduction takes `P_R[23:0]` (the registered product) and outputs `R[11:0]`.
+Implement the modular reduction algorithm described below. The reduction takes `P_R[{{pw_minus_1}}:0]` (the registered product) and outputs `R[{{dw_minus_1}}:0]`.
 
 ### Summary
 {{summary}}
@@ -70,11 +70,11 @@ Implement the modular reduction algorithm described below. The reduction takes `
 
 1. Output the COMPLETE module from `module modmul(` to `endmodule`, including the fixed skeleton
 2. The fixed parts (DSP multiplier P_DSP, product register P_R) MUST be included verbatim as shown above
-3. Your reduction logic MUST produce R = P_R mod 3329 for all valid 24-bit inputs (P_R ≤ 3328×3328 = 11,075,584)
-4. The output R must be in range [0, 3328]
+3. Your reduction logic MUST produce R = P_R mod {{q}} for all valid {{pw}}-bit inputs (P_R ≤ {{q_minus_1}}×{{q_minus_1}} = {{q_minus_1_sq}})
+4. The output R must be in range [0, {{q_minus_1}}]
 5. **Synthesizable RTL** — no initial, forever, $finish, or testbench constructs
 6. **Self-contained** — do NOT instantiate external sub-modules for the reduction. Write the reduction logic inline.
-7. **Reduction is combinational** (P_R is already registered). The reduction must produce R within ONE clock cycle after P_R is valid — there is no further register stage in the fixed skeleton. Use `assign` / `always @*`.
+7. **Match the paper's timing exactly.** The fixed skeleton provides P_DSP (DSP multiply) and P_R (product register) — keep both verbatim. For the reduction from P_R to R: if the paper's design is purely combinational after P_R, use `assign` / `always @*` (no register stage). If the paper's design pipelines the reduction with register stages, reproduce those stages faithfully: same number of stages, same per-stage arithmetic, same reset values. Do NOT add or remove pipeline stages relative to the paper's timing description. The paper's stated latency is {{latency_cycles}} cycles (0 = unknown; follow the Timing section).
 8. **STRICTLY Verilog-2001**: NO `always_comb`, NO `logic` type, NO `N'(expr)` casts
    - Combinational: use `always @*` or `assign`
    - wire/reg: use `wire` or `reg`
@@ -90,21 +90,22 @@ These rules directly affect FPGA resource usage (LUTs, CARRY4 chains, DSP absorp
 Every numeric literal MUST have an explicit bit width that matches its context. Unsized constants default to 32 bits and force the synthesizer to widen surrounding logic.
 ```
 // GOOD:                                         // BAD:
-wire [12:0] s = a + 13'd3329;                    wire [12:0] s = a + 3329;   // 32-bit constant
-wire [11:0] q = 12'd3329;                        wire [11:0] q = 3329;
+wire [{{dw}}:0] s = a + {{dw_plus_1}}'d{{q}};    wire [{{dw}}:0] s = a + {{q}};   // 32-bit constant
+wire [{{dw_minus_1}}:0] q = {{dw}}'d{{q}};       wire [{{dw_minus_1}}:0] q = {{q}};
 ```
 
 ### Conditional add / subtract: put the MUX at the INPUT of the adder
 Select the addend (0 or Q) based on the sign/borrow bit, then do ONE addition. Never compute `x+Q` in full and then MUX between `x+Q` and `x` — that duplicates a 12-bit adder and creates a 12-bit wide MUX.
 ```
 // GOOD:                                         // BAD:
-wire [11:0] addend = sign ? 12'd3329 : 12'd0;    assign R = sign ? (x + 12'd3329) : x;
-assign R = x[11:0] + addend;
+wire [{{dw_minus_1}}:0] addend = sign ? {{dw}}'d{{q}} : {{dw}}'d0;    assign R = sign ? (x + {{dw}}'d{{q}}) : x;
+assign R = x[{{dw_minus_1}}:0] + addend;
 ```
 
 ### Fold constant-multiplication shifts into adjacent arithmetic
-When the algorithm multiplies by a small constant (e.g. ×13 = ×8 + ×4 + ×1), do NOT create a standalone intermediate wire holding the full `13*x` result. Instead, push the shift terms directly into the surrounding additions/subtractions so the synthesizer can merge them with the carry chain.
+When the algorithm multiplies by a small constant, do NOT create a standalone intermediate wire holding the full `k*x` result. Instead, push the shift terms directly into the surrounding additions/subtractions so the synthesizer can merge them with the carry chain.
 ```
+{% if scheme_name == "kyber" %}
 // GOOD:                                         // BAD:
 // K-RED = 13*low - high, no materialised 13*low
 wire [13:0] part_hi = {3'b0,low,3'b0} - {3'b0,high};   // 8*low - high
@@ -112,14 +113,19 @@ wire [10:0] part_lo = {3'b0,low} + {1'b0,low,2'b0};     // 5*low
 wire [13:0] diff   = part_hi + {3'b0,part_lo};           // 13*low - high
                                                         wire [11:0] temp = (low<<2)+(low<<3)+low; // 13*low
                                                         wire [12:0] diff = {1'b0,temp} - {2'b0,high};
+{% else %}
+// GOOD:                                         // BAD:
+// Fold ×5 = ×4 + ×1 into one addition:          wire [DW+2:0] s = 5*x;   // standalone constant mult
+wire [DW+2:0] s = {x, 2'b0} + x;
+{% endif %}
 ```
 
 ### Range checks: use sign bits and borrow flags, not comparators
 After a signed subtraction whose result is in [-Q, Q), the sign bit (MSB) alone tells you whether to add Q — you don't need `if (result < 0)` or `if (result >= Q)` which instantiate a separate comparator.
 ```
 // GOOD:                                         // BAD:
-assign R = diff[12] ? (diff[11:0]+12'd3329)      if (diff < 0) ...
-                : diff[11:0];                     if (result >= 12'd3329) ...
+assign R = diff[{{dw}}] ? (diff[{{dw_minus_1}}:0]+{{dw}}'d{{q}})      if (diff < 0) ...
+                : diff[{{dw_minus_1}}:0];         if (result >= {{dw}}'d{{q}}) ...
 ```
 
 ### Control intermediate bit widths
@@ -130,7 +136,7 @@ wire [18:0] sum = {1'b0,data[17:0]} + {7'b0,y};  wire [31:0] sum = data[17:0] + 
 ```
 
 ### NO `/` or `%` operators
-Never use the Verilog divide or modulo operators. Modular reduction MUST use the paper's algorithm (LUT, K-reduction, Barrett, Montgomery, conditional subtract chain) — never `assign R = P_R % 3329`.
+Never use the Verilog divide or modulo operators. Modular reduction MUST use the paper's algorithm (LUT, K-reduction, Barrett, Montgomery, conditional subtract chain) — never `assign R = P_R % {{q}}`.
 
 ### NO `integer` in the datapath
 `integer` is 32-bit signed. Use explicitly-sized `wire` or `reg` for all hardware signals. `integer` is acceptable ONLY as a `genvar` or a loop index inside a `function`; even then prefer sized types.

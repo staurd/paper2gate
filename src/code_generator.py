@@ -11,6 +11,7 @@ from src.console import console
 from src.ir_models import GeneratedModule, ModuleSpec
 from src.llm_client import LLMClient
 from src.prompt_manager import load_prompt
+from src.schemes import KYBER, SchemeProfile, render_vars
 from src.verilog_utils import cleanup, extract_verilog, is_valid_module
 
 
@@ -32,6 +33,8 @@ def _spec_context(module_spec: ModuleSpec) -> dict[str, Any]:
         "behavior": hw.behavior,
         "timing": hw.timing,
         "constraints": hw.constraints,
+        "correction_factor": hw.correction_factor,
+        "latency_cycles": hw.latency_cycles,
     }
 
 
@@ -130,16 +133,21 @@ def generate_verilog(
     client: LLMClient,
     max_retries: int = 2,
     target_interface: str | None = None,
+    scheme: SchemeProfile | None = None,
 ) -> GeneratedModule:
     """Generate a Verilog module from a hardware spec. No auto-fix loop.
 
     Args:
         target_interface: If "modred", use the modred-specialized prompt
                           that enforces the fixed modred interface.
+        scheme: PQC scheme profile. Renders the fixed-interface constants
+                (operand widths, modulus) into the modmul prompt. Defaults
+                to KYBER for backward compatibility with direct callers.
     """
     ctx = _spec_context(module_spec)
     if target_interface == "modmul":
         prompt_name = "generate_modmul.jinja"
+        ctx.update(render_vars(scheme or KYBER))
     else:
         prompt_name = "generate_verilog.jinja"
     user_prompt = load_prompt(prompt_name, **ctx)
@@ -201,6 +209,7 @@ def generate_with_check(
     client: LLMClient,
     max_rounds: int = 3,
     target_interface: str | None = None,
+    scheme: SchemeProfile | None = None,
 ) -> tuple[GeneratedModule, list[str]]:
     """
     Generate Verilog, then run an iverilog-check + LLM-fix loop.
@@ -208,7 +217,7 @@ def generate_with_check(
     Returns (final_module, error_logs).
     """
     console.print(f"    Generating [cyan]{module_spec.module_name}[/cyan]...")
-    module = generate_verilog(module_spec, client, target_interface=target_interface)
+    module = generate_verilog(module_spec, client, target_interface=target_interface, scheme=scheme)
     error_logs: list[str] = []
 
     for round_num in range(1, max_rounds + 1):
