@@ -10,8 +10,8 @@ xvlog.pb
 a.out
 *.vvp
 
-test_papers/*.pdf
-tests/tb_bfly
+
+tests/
 *.rpt
 scripts/_synth*.tcl
 vivado.jou
