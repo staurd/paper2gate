@@ -17,6 +17,7 @@ from src.code_generator import (
     save_error_logs,
     save_verilog,
 )
+from src.config import get_vivado_config
 from src.innovation_extractor import extract_innovations, save_specs
 from src.integration_generator import generate_butterfly, save_butterfly
 from src.ir_models import parse_module_params
@@ -24,7 +25,7 @@ from src.llm_client import LLMClient
 from src.pdf_parser import extract_text
 from src.schemes import resolve_scheme
 from src.verification_runner import verify_module
-from src.vivado_report import run_synthesis
+from src.vivado_report import DEFAULT_PART, resolve_part, run_synthesis
 
 
 def build_output_dir(pdf_path: str, base_dir: str = "outputs") -> Path:
@@ -34,6 +35,50 @@ def build_output_dir(pdf_path: str, base_dir: str = "outputs") -> Path:
     out = Path(base_dir) / f"{paper_name}_{timestamp}"
     out.mkdir(parents=True, exist_ok=True)
     return out
+
+
+def resolve_synth_part(cli_part: str | None, extracted_device: str) -> str:
+    """Pick the Vivado part used for synthesis.
+
+    Priority: --part > config.yaml vivado.part > device extracted from the
+    paper > DEFAULT_PART. The extracted string is only a hint — papers usually
+    print a bare device name that Vivado would reject — so it goes through
+    vivado_report.resolve_part(), and every outcome is spelled out in the log
+    (a silently substituted part would make the resource numbers meaningless).
+    """
+    if cli_part:
+        console.print(f"  Synthesis FPGA part: [cyan]{cli_part}[/cyan] (--part)")
+        return cli_part
+
+    cfg_part = str(get_vivado_config().get("part") or "").strip()
+    if cfg_part:
+        console.print(f"  Synthesis FPGA part: [cyan]{cfg_part}[/cyan] (config.yaml)")
+        if extracted_device:
+            console.print(
+                f"    [dim]Paper reports {extracted_device} — override wins[/dim]"
+            )
+        return cfg_part
+
+    part, provenance = resolve_part(extracted_device)
+    if provenance == "paper":
+        console.print(f"  Synthesis FPGA part: [cyan]{part}[/cyan] (from paper)")
+    elif provenance == "completed":
+        console.print(
+            f"  Synthesis FPGA part: [cyan]{part}[/cyan] "
+            f"(paper reports '{extracted_device}' -> package/speed grade assumed, "
+            f"override with --part)"
+        )
+    elif provenance == "unknown":
+        console.print(
+            f"  Synthesis FPGA part: [yellow]{part}[/yellow] (default — paper's "
+            f"'{extracted_device}' not recognised, override with --part)"
+        )
+    else:
+        console.print(
+            f"  Synthesis FPGA part: [yellow]{part}[/yellow] "
+            f"(default — paper states no device)"
+        )
+    return part
 
 
 def run_pipeline(
@@ -48,6 +93,7 @@ def run_pipeline(
     use_synth: bool = True,
     target_interface: str | None = None,
     scheme: str | None = None,
+    part: str | None = None,
 ) -> Path:
     """Run the full paper-to-Verilog pipeline.
 
@@ -61,6 +107,9 @@ def run_pipeline(
                 Drives the operand widths/modulus rendered into the prompts,
                 golden-model verification parameters, and Stage 3b reference
                 file selection.
+        part: Vivado part for Stage 3b synthesis (e.g. "xc7a200tffg1156-3").
+              None = config.yaml vivado.part, else the device extracted from
+              the paper, else the default part. See resolve_synth_part().
     """
     project_root = Path(__file__).parent.parent
 
@@ -116,6 +165,10 @@ def run_pipeline(
     if not analysis.innovations:
         console.print("[yellow]No innovations found in the paper.[/yellow]")
         return out_dir
+
+    # Resolved here, before the slow generation stages, so a wrong device can
+    # be caught (Ctrl-C, or re-run with --part) before burning LLM time.
+    synth_part = resolve_synth_part(part, analysis.fpga_device)
 
     # Stage 2: Generate Verilog for each module
     if dry_run:
@@ -266,7 +319,7 @@ def run_pipeline(
             # the scheme has reference files) the full butterfly with the
             # reference design + generated modmul.
             vfiles_modmul = [str(p) for p in modmul_paths]
-            run_synthesis(vfiles_modmul, top="modmul", output_dir=out_dir)
+            run_synthesis(vfiles_modmul, top="modmul", output_dir=out_dir, part=synth_part)
 
             if profile.reference_files:
                 ref_dir = project_root / "reference"
@@ -275,7 +328,7 @@ def run_pipeline(
                     rf_path = ref_dir / rf
                     if rf_path.exists():
                         vfiles_bfly.append(str(rf_path))
-                run_synthesis(vfiles_bfly, top="butterfly", output_dir=out_dir)
+                run_synthesis(vfiles_bfly, top="butterfly", output_dir=out_dir, part=synth_part)
             else:
                 console.print(
                     f"    [yellow]No reference butterfly files for {profile.name} "
@@ -290,7 +343,7 @@ def run_pipeline(
             else:
                 vfiles = [str(p) for p in modmul_paths] + [str(bfly_path)]
                 top_module = "butterfly"
-                run_synthesis(vfiles, top=top_module, output_dir=out_dir)
+                run_synthesis(vfiles, top=top_module, output_dir=out_dir, part=synth_part)
 
     console.print(f"\n[bold green]Done![/bold green] All outputs in: {out_dir}")
     return out_dir
@@ -380,6 +433,13 @@ def main():
         help="PQC scheme profile (default: auto-detect from paper text; "
              "applies to all papers in a batch)",
     )
+    parser.add_argument(
+        "--part",
+        default=None,
+        help="Vivado part for synthesis, e.g. xc7a200tffg1156-3 "
+             "(default: config.yaml vivado.part, else the device extracted "
+             f"from the paper, else {DEFAULT_PART})",
+    )
 
     args = parser.parse_args()
 
@@ -411,6 +471,7 @@ def main():
                 use_synth=not args.no_synth,
                 target_interface="modmul" if args.modmul else None,
                 scheme=args.scheme,
+                part=args.part,
             )
             results.append((pdf, str(out_dir), None))
         except KeyboardInterrupt:

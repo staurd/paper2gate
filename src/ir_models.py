@@ -36,6 +36,11 @@ class ModuleSpec(BaseModel):
 class PaperAnalysis(BaseModel):
     paper_title: str
     innovations: list[ModuleSpec]
+    # FPGA the paper's OWN experiments target, as printed (e.g. "XC7A100T",
+    # "xc7a200tffg1156-3"). "" = not stated; the synthesis stage then falls
+    # back to its default part. Resolved to a legal Vivado part by
+    # vivado_report.resolve_part().
+    fpga_device: str = ""
 
 
 class GeneratedModule(BaseModel):

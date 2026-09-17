@@ -7,6 +7,10 @@ llm:
   api_key: ${DEEPSEEK_API_KEY}  # resolved from env var
   max_tokens: 8192
   temperature: 0.2
+  # Character budget for the paper text sent to the extraction prompt. The
+  # references section is trimmed first, so this only needs to cover the body.
+  # Lower it to trade extraction cost/time for depth of reading.
+  max_paper_chars: 100000
 
 output:
   base_dir: outputs
@@ -24,3 +28,7 @@ yosys:
 
 vivado:
   binary: D:/Vivado2018.3/Vivado/2018.3/bin/vivado.BAT
+  # Synthesis target part. Leave empty to use the device extracted from the
+  # paper (falling back to xc7a35tcsg324-1 when the paper states none); set it
+  # to pin every run to your own board, overriding the paper.
+  part: ""

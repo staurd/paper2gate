@@ -100,4 +100,42 @@ assert b.innovations[0].hardware_spec.latency_cycles == 0
 assert mod_mul(8380416, 8380416, 8380417) == 1            # (-1)(-1) mod q
 assert mod_mul(1234567, 7654321, 8380417) == (1234567 * 7654321) % 8380417
 
+# --- reference trimming ------------------------------------------------------
+
+from src.innovation_extractor import _trim_references
+
+# A trailing bibliography (12-21% of a real paper) is dropped.
+body = "A" * 8000 + "\nReferences\n" + "B" * 1500
+out, dropped = _trim_references(body)
+assert "References" not in out and "B" not in out
+assert out == "A" * 8000 + "\n" and dropped == 1511
+
+# A "References" heading early in the document is not the bibliography
+# (survey papers cite per section) — never trim on it.
+early = "References\n" + "A" * 20000
+assert _trim_references(early) == (early, 0)
+
+# A heading near the end with almost nothing after it isn't worth trimming.
+stub = "A" * 8000 + "\nReferences\n" + "B" * 100
+assert _trim_references(stub) == (stub, 0)
+
+# No heading at all (short papers, or PDF extraction that lost it).
+plain = "A" * 5000
+assert _trim_references(plain) == (plain, 0)
+
+# Real papers: every one in test_papers has a trimmable bibliography.
+import glob as _glob
+import os as _os
+
+_seen = set()
+for f in _glob.glob("outputs/*/extracted_text/full_text.txt"):
+    key = _os.path.basename(_os.path.dirname(_os.path.dirname(f))).split("_20")[0]
+    if key in _seen:
+        continue
+    _seen.add(key)
+    text = open(f, encoding="utf-8", errors="replace").read()
+    trimmed, n = _trim_references(text)
+    assert n == 0 or n > 1000
+    assert len(trimmed) <= len(text)
+
 print("All scheme tests passed.")

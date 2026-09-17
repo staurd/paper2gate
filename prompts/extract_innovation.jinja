@@ -39,6 +39,7 @@ Return a JSON object with this exact structure:
 ```json
 {
   "paper_title": "The title of the paper",
+  "fpga_device": "FPGA used for the paper's own experiments, verbatim (e.g. xc7a100tcsg324-1, XC7A100T, Artix-7). Empty string if not stated.",
   "innovations": [
     {
       "module_name": "descriptive_snake_case_name",
@@ -77,6 +78,7 @@ Return a JSON object with this exact structure:
 6. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
 7. **correction_factor** — CRITICAL for modular multipliers. Some reduction algorithms do NOT output a true `a*b mod q`; they output `k*a*b mod q`, off by a known constant `k`. The classic case is K-reduction (Longa-Naehrig), where the modulus is written `q = k*2^x + 1` and the design computes `a*b*k mod q` (for Kyber, k=13). This factor is normally cancelled elsewhere in the NTT by pre-multiplying the twiddle factor by `k^-1 mod q`. Set `correction_factor` to that `k` (e.g. 13). If the algorithm produces a true `a*b mod q` with no such offset (Barrett, Montgomery-with-final-correction, plain schoolbook + reduction, LUT-only), set it to 1. Read the algorithm's stated Result/output carefully — if it says `r = a*b*k mod q`, the factor is k, not 1.
 8. **latency_cycles** — for modular_arithmetic modules: the total number of clock cycles from when valid A/B appear at the module inputs to when R is valid at the output, counting EVERY register stage in the datapath INCLUDING the product register. Purely combinational reduction after the product register => latency_cycles = 1. A pipelined reduction with N register stages after P_R => latency_cycles = 1 + N. If unknown, set 0 (the pipeline applies a scheme default).
+9. **fpga_device** — the FPGA the paper's OWN implementation was tested on (look in the implementation / experimental-results section). Copy it EXACTLY as printed, including package and speed grade when given (e.g. `xc7a200tffg1156-3`). Papers usually report several devices when comparing against prior work — report the one the paper's own design was synthesized for, NOT the devices cited from other papers' results. If the paper gives only a device name (`XC7A100T`) or a family (`Artix-7`), report that. Use `""` if no device is stated. If the text below is marked as a truncated excerpt, never guess a device that might appear in the missing part — report `""`.
 
 {% if target_interface == "modmul" %}
 ## CRITICAL: Target Interface Constraint
@@ -110,3 +112,7 @@ The module has TWO parts:
 ## Paper text
 
 {{paper_text}}
+
+{% if truncation_note is defined and truncation_note %}
+{{ truncation_note }}
+{% endif %}
