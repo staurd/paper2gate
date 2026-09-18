@@ -16,18 +16,13 @@ output:
   base_dir: outputs
 
 iverilog:
-  # Path to iverilog binary. Leave as "iverilog" to find on PATH,
-  # or set absolute path e.g. "C:/iverilog/bin/iverilog.exe"
-  binary: D:/Program Files (x86)/iverilog/bin/iverilog.exe
-  # Extra flags passed to iverilog (e.g., "-g2012" for SystemVerilog support)
+  # Empty means search PATH. Override with PAPER2GATE_IVERILOG_BINARY.
+  binary: ""
   flags: "-g2012"
 
-yosys:
-  binary: E:/download/oss-cad-suite/bin/yosys.exe
-  lib_path: E:/download/oss-cad-suite/lib
-
 vivado:
-  binary: D:/Vivado2018.3/Vivado/2018.3/bin/vivado.BAT
+  # Empty means search PATH. Override with PAPER2GATE_VIVADO_BINARY.
+  binary: ""
   # Synthesis target part. Leave empty to use the device extracted from the
   # paper (falling back to xc7a35tcsg324-1 when the paper states none); set it
   # to pin every run to your own board, overriding the paper.

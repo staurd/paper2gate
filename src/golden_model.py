@@ -9,22 +9,19 @@ def mod_mul(a: int, b: int, q: int, k: int | None = None) -> int:
     return (a * b) % q
 
 
-def mod_add(a: int, b: int, q: int) -> int:
-    return (a + b) % q
-
-
-def mod_sub(a: int, b: int, q: int) -> int:
-    return (a - b) % q
-
-
-def ct_butterfly(a: int, b: int, w: int, q: int, k: int | None = None) -> tuple[int, int]:
-    """CT butterfly: a_out = a + b*w mod q, b_out = a - b*w mod q."""
-    bw = mod_mul(b, w, q, k)
-    return mod_add(a, bw, q), mod_sub(a, bw, q)
-
-
 def generate_test_vectors(n: int, q: int, seed: int = 42) -> list[dict]:
-    """Generate random test vectors within [0, q-1]."""
+    """Generate boundary plus deterministic random vectors within [0, q-1]."""
     import random
+
+    if n <= 0:
+        return []
+    boundary = [(0, 0), (0, q - 1), (1, q - 1), (q - 1, q - 1)]
+    vectors = [{"a": a, "b": b} for a, b in boundary[:n]]
+    if len(vectors) == n:
+        return vectors
     rng = random.Random(seed)
-    return [{"a": rng.randint(0, q - 1), "b": rng.randint(0, q - 1)} for _ in range(n)]
+    vectors.extend(
+        {"a": rng.randint(0, q - 1), "b": rng.randint(0, q - 1)}
+        for _ in range(n - len(vectors))
+    )
+    return vectors

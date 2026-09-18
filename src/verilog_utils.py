@@ -19,6 +19,57 @@ def is_valid_module(verilog: str) -> bool:
            bool(re.search(r'\bendmodule\b', verilog))
 
 
+def validate_modmul_interface(
+    verilog: str,
+    data_width: int,
+    module_name: str = "modmul",
+) -> list[str]:
+    """Validate the fixed modmul interface and synthesizable RTL constraints."""
+    errors: list[str] = []
+    if not is_valid_module(verilog):
+        return ["missing module declaration or endmodule"]
+    code = re.sub(r"//.*?$|/\*.*?\*/", "", verilog, flags=re.MULTILINE | re.DOTALL)
+    module_names = re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)", code)
+    if module_names != [module_name]:
+        errors.append(f"expected exactly one module named '{module_name}', found {module_names}")
+
+    header = re.search(
+        rf"\bmodule\s+{re.escape(module_name)}\s*(?:#\s*\([^)]*\))?\s*\((.*?)\)\s*;",
+        verilog,
+        re.DOTALL,
+    )
+    if not header:
+        return [f"module '{module_name}' with an ANSI port list was not found"]
+
+    block = header.group(1)
+    expected_width = f"[{data_width - 1}:0]"
+    if not re.search(r"\binput\b[^;]*\bclk\b", block):
+        errors.append("missing input port 'clk'")
+    if not re.search(r"\binput\b[^;]*\brst\b", block):
+        errors.append("missing input port 'rst'")
+    if not re.search(rf"\binput\s+{re.escape(expected_width)}\s+", block):
+        errors.append(f"missing {expected_width} input declaration for A/B")
+    for port in ("A", "B"):
+        if not re.search(rf"\b{port}\b", block):
+            errors.append(f"missing input port '{port}'")
+    if not re.search(rf"\boutput\s+{re.escape(expected_width)}\s+\bR\b", block):
+        errors.append(f"output port 'R' must be {expected_width}")
+
+    forbidden = {
+        r"%": "modulo operator",
+        r"(?<!/)/(?!/)": "division operator",
+        r"\binitial\b": "initial block",
+        r"\$finish\b": "$finish",
+        r"\$display\b": "$display",
+    }
+    for token, description in forbidden.items():
+        found = bool(re.search(token, code))
+        if found:
+            errors.append(f"contains forbidden {description}")
+
+    return errors
+
+
 def cleanup(*paths: Path):
     """Delete temp files, ignoring errors."""
     for p in paths:

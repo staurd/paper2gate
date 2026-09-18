@@ -4,8 +4,7 @@ Usage:
     from src.prompt_manager import load_prompt
 
     # Render with Jinja2 variables
-    prompt = load_prompt("generate_verilog.jinja",
-                         module_name="foo", category="bar", ...)
+    prompt = load_prompt("generate_modmul.jinja", module_name="modmul", ...)
 
     # Load raw text without rendering
     text = load_prompt("fix_verilog.jinja")
@@ -24,7 +23,7 @@ def load_prompt(name: str, **kwargs) -> str:
     Load a prompt file from prompts/ and optionally render with Jinja2.
 
     Args:
-        name: Prompt filename (e.g., "generate_verilog.txt")
+        name: Prompt filename (e.g., "generate_modmul.jinja")
         **kwargs: Jinja2 template variables (optional)
 
     Returns:

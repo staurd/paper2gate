@@ -33,6 +33,8 @@ def _gen_modmul_testbench(
     if len(data_in) < 2:
         raise ValueError(f"Module {module_name} has only {len(data_in)} data inputs, need 2 for modmul verification")
     in_a, in_b = data_in[0], data_in[1]
+    if not ports["outputs"]:
+        raise ValueError(f"Module {module_name} has no output port")
     out_r = ports["outputs"][0]
 
     # Find actual clock/reset port names (handle both "clk"/"rst" and "clk"/"rst_n")
@@ -42,7 +44,7 @@ def _gen_modmul_testbench(
 
     clk_line = f".{clk_port}(clk)," if ports["has_clk"] else ""
     rst_line = f".{rst_port}(rst_n)," if ports["has_rst"] else ""
-    clk_wait = f"repeat({latency + 1}) @(posedge clk);" if ports["has_clk"] else "#1;"
+    clk_wait = f"repeat({max(1, latency)}) @(posedge clk); #1;" if ports["has_clk"] else "#1;"
 
     # Reset polarity: drive rst_n low for active-low, high for active-high
     rst_init = "1'b1" if rst_active_high else "1'b0"
@@ -54,35 +56,13 @@ def _gen_modmul_testbench(
         tests.append(f"        // Test {i}: a={v['a']}, b={v['b']} -> {expected}")
         tests.append(f"        {in_a} = {dw}'d{v['a']}; {in_b} = {dw}'d{v['b']};")
         tests.append(f"        {clk_wait}")
-        if ports["has_clk"]:
-            # 3-sample window: the extracted latency can be off by a cycle or
-            # two. Over-waiting is safe because the next inputs are applied
-            # only after this check. Fail only if ALL three samples mismatch.
-            tests.append(f"        if ({out_r} !== {dw}'d{expected}) begin")
-            tests.append(f"            @(posedge clk);")
-            tests.append(f"            if ({out_r} !== {dw}'d{expected}) begin")
-            tests.append(f"                @(posedge clk);")
-            tests.append(f"                if ({out_r} !== {dw}'d{expected}) begin")
-            tests.append(f'                    $display("FAIL[{i}]: a=%d b=%d got=%d expected={expected}", '
-                         f'{in_a}, {in_b}, {out_r});')
-            tests.append(f"                    errors = errors + 1;")
-            tests.append(f"                end else begin")
-            tests.append(f'                    $display("PASS[{i}]");')
-            tests.append(f"                end")
-            tests.append(f"            end else begin")
-            tests.append(f'                $display("PASS[{i}]");')
-            tests.append(f"            end")
-            tests.append(f"        end else begin")
-            tests.append(f'            $display("PASS[{i}]");')
-            tests.append(f"        end")
-        else:
-            tests.append(f"        if ({out_r} !== {dw}'d{expected}) begin")
-            tests.append(f'            $display("FAIL[{i}]: a=%d b=%d got=%d expected={expected}", '
-                         f'{in_a}, {in_b}, {out_r});')
-            tests.append(f"            errors = errors + 1;")
-            tests.append(f"        end else begin")
-            tests.append(f'            $display("PASS[{i}]");')
-            tests.append(f"        end")
+        tests.append(f"        if ({out_r} !== {dw}'d{expected}) begin")
+        tests.append(f'            $display("FAIL[{i}]: a=%d b=%d got=%d expected={expected}", '
+                     f'{in_a}, {in_b}, {out_r});')
+        tests.append(f"            errors = errors + 1;")
+        tests.append(f"        end else begin")
+        tests.append(f'            $display("PASS[{i}]");')
+        tests.append(f"        end")
 
     test_body = "\n".join(tests)
     dwm1 = dw - 1
@@ -143,14 +123,31 @@ def _run_simulation(
     exe_path = tmp_dir / "paper2gate_sim"
 
     cmd = [iv_bin] + iv_flags.split() + ["-o", str(exe_path)] + verilog_files + [str(tb_path)]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError as exc:
+        cleanup(tb_path, exe_path)
+        raise OSError(f"iverilog not found: {iv_bin}") from exc
+    except subprocess.TimeoutExpired as exc:
+        cleanup(tb_path, exe_path)
+        raise OSError("iverilog compilation timed out") from exc
 
     if result.returncode != 0:
         cleanup(tb_path, exe_path)
         return False, result.stderr.strip()
 
-    vvp_bin = shutil.which("vvp") or str(Path(iv_bin).parent / "vvp")
-    result = subprocess.run([vvp_bin, str(exe_path)], capture_output=True, text=True, timeout=30)
+    vvp_bin = shutil.which("vvp")
+    if not vvp_bin:
+        candidates = [Path(iv_bin).parent / "vvp", Path(iv_bin).parent / "vvp.exe"]
+        vvp_bin = next((str(path) for path in candidates if path.exists()), str(candidates[0]))
+    try:
+        result = subprocess.run([vvp_bin, str(exe_path)], capture_output=True, text=True, timeout=30)
+    except FileNotFoundError as exc:
+        cleanup(tb_path, exe_path)
+        raise OSError(f"vvp not found: {vvp_bin}") from exc
+    except subprocess.TimeoutExpired as exc:
+        cleanup(tb_path, exe_path)
+        raise OSError("vvp simulation timed out") from exc
     cleanup(tb_path, exe_path)
 
     output = result.stdout + result.stderr
@@ -167,7 +164,6 @@ def _run_simulation(
 def verify_module(
     verilog_files: list[str],
     module_name: str,
-    module_type: str = "modmul",
     hardware_spec_params: dict | None = None,
     num_vectors: int = 4,
     latency: int = 3,
@@ -191,15 +187,10 @@ def verify_module(
 
     ports = scan_ports(verilog_files, module_name)
 
-    if module_type == "modmul":
-        vectors = generate_test_vectors(num_vectors, q)
-        for v in vectors:
-            v["expected"] = mod_mul(v["a"], v["b"], q, k)
-        tb = _gen_modmul_testbench(module_name, vectors, ports, latency, dw)
-    elif module_type == "butterfly":
-        return False, "Butterfly verification not yet implemented — verify modmul module directly"
-    else:
-        return False, f"Unknown module type: {module_type}"
+    vectors = generate_test_vectors(num_vectors, q)
+    for v in vectors:
+        v["expected"] = mod_mul(v["a"], v["b"], q, k)
+    tb = _gen_modmul_testbench(module_name, vectors, ports, latency, dw)
 
     passed, fail_output = _run_simulation(verilog_files, tb, module_name)
     if passed:

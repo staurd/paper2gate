@@ -3,6 +3,8 @@ with iverilog syntax checking and auto-fix loop."""
 
 import subprocess
 import tempfile
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,7 @@ from src.ir_models import GeneratedModule, ModuleSpec
 from src.llm_client import LLMClient
 from src.prompt_manager import load_prompt
 from src.schemes import KYBER, SchemeProfile, render_vars
-from src.verilog_utils import cleanup, extract_verilog, is_valid_module
+from src.verilog_utils import cleanup, extract_verilog, is_valid_module, validate_modmul_interface
 
 
 # ---------------------------------------------------------------------------
@@ -38,12 +40,27 @@ def _spec_context(module_spec: ModuleSpec) -> dict[str, Any]:
     }
 
 
+def _validate_generated_code(
+    verilog: str,
+    scheme: SchemeProfile | None,
+) -> list[str]:
+    if not is_valid_module(verilog):
+        return ["missing 'module'/'endmodule'"]
+    return validate_modmul_interface(verilog, (scheme or KYBER).data_width)
+
+
 # ---------------------------------------------------------------------------
-# Iverilog Integration
+# Iverilog checks
 # ---------------------------------------------------------------------------
 def _load_iverilog_config() -> tuple[str, str]:
     iv_cfg = get_iverilog_config()
     return iv_cfg.get("binary", "iverilog"), iv_cfg.get("flags", "-g2012")
+
+
+def iverilog_available() -> bool:
+    """Return whether the configured Icarus executable can be launched."""
+    binary, _ = _load_iverilog_config()
+    return Path(binary).exists() or shutil.which(binary) is not None
 
 
 def _run_iverilog(verilog_code: str) -> tuple[bool, str]:
@@ -82,6 +99,11 @@ def _run_iverilog(verilog_code: str) -> tuple[bool, str]:
             cleanup(Path(tmp.name))
         except OSError:
             pass
+
+
+def check_verilog(verilog_code: str) -> tuple[bool, str]:
+    """Public syntax-check wrapper used by the pipeline and smoke checks."""
+    return _run_iverilog(verilog_code)
 
 
 # ---------------------------------------------------------------------------
@@ -128,28 +150,22 @@ def _fix_from_iverilog(
 # Generation (no iverilog check)
 # ---------------------------------------------------------------------------
 
-def generate_verilog(
+def generate_modmul(
     module_spec: ModuleSpec,
     client: LLMClient,
     max_retries: int = 2,
-    target_interface: str | None = None,
     scheme: SchemeProfile | None = None,
 ) -> GeneratedModule:
-    """Generate a Verilog module from a hardware spec. No auto-fix loop.
+    """Generate the fixed-interface modmul from a hardware spec.
 
     Args:
-        target_interface: If "modred", use the modred-specialized prompt
-                          that enforces the fixed modred interface.
         scheme: PQC scheme profile. Renders the fixed-interface constants
                 (operand widths, modulus) into the modmul prompt. Defaults
                 to KYBER for backward compatibility with direct callers.
     """
     ctx = _spec_context(module_spec)
-    if target_interface == "modmul":
-        prompt_name = "generate_modmul.jinja"
-        ctx.update(render_vars(scheme or KYBER))
-    else:
-        prompt_name = "generate_verilog.jinja"
+    prompt_name = "generate_modmul.jinja"
+    ctx.update(render_vars(scheme or KYBER))
     user_prompt = load_prompt(prompt_name, **ctx)
 
     base_system = (
@@ -169,7 +185,8 @@ def generate_verilog(
         )
         verilog = extract_verilog(raw)
 
-        if is_valid_module(verilog):
+        validation_errors = _validate_generated_code(verilog, scheme)
+        if not validation_errors:
             return GeneratedModule(
                 module_name=module_spec.module_name,
                 verilog_code=verilog,
@@ -177,16 +194,13 @@ def generate_verilog(
 
         if attempt < max_retries:
             console.print(
-                f"    [yellow]Missing 'module'/'endmodule' — retrying "
+                f"    [yellow]Generated Verilog failed validation "
                 f"({attempt + 1}/{max_retries})...[/yellow]"
             )
             system_prompt = (
                 base_system +
-                " CRITICAL: Your previous output lacked 'module'/'endmodule'. "
-                "The first non-comment line MUST be 'module {name}'. "
-                "The last line MUST be 'endmodule'.".format(
-                    name=module_spec.module_name
-                )
+                " CRITICAL: your previous output failed validation: "
+                f"{'; '.join(validation_errors)}. Return a complete valid module."
             )
         else:
             console.print(
@@ -208,7 +222,6 @@ def generate_with_check(
     module_spec: ModuleSpec,
     client: LLMClient,
     max_rounds: int = 3,
-    target_interface: str | None = None,
     scheme: SchemeProfile | None = None,
 ) -> tuple[GeneratedModule, list[str]]:
     """
@@ -217,7 +230,7 @@ def generate_with_check(
     Returns (final_module, error_logs).
     """
     console.print(f"    Generating [cyan]{module_spec.module_name}[/cyan]...")
-    module = generate_verilog(module_spec, client, target_interface=target_interface, scheme=scheme)
+    module = generate_modmul(module_spec, client, scheme=scheme)
     error_logs: list[str] = []
 
     for round_num in range(1, max_rounds + 1):
@@ -257,6 +270,8 @@ def generate_with_check(
 # ---------------------------------------------------------------------------
 
 def save_verilog(module: GeneratedModule, output_dir: Path) -> Path:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", module.module_name):
+        raise ValueError(f"Unsafe or invalid Verilog module name: {module.module_name!r}")
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{module.module_name}.v"
     out_path.write_text(module.verilog_code, encoding="utf-8")

@@ -1,36 +1,18 @@
-You are an expert in digital hardware design and post-quantum cryptography. Your task is to analyze an academic paper describing NTT (Number Theoretic Transform) hardware and extract ONLY innovations related to the **butterfly unit** and **modular arithmetic**.
+You are an expert in digital hardware design and post-quantum cryptography. Analyze the paper and extract ONLY one implementable innovation for modular multiplication or modular reduction.
 
-{% if target_interface == "modmul" %}
 ## What to extract (ONLY this category)
 
-**modular_arithmetic** — Novel modular multiplication or modular reduction algorithms for NTT/PQC. Examples:
-   - New modular reduction (K-Red, LUT-based, Barrett, Montgomery variants)
-   - New modular multiplier designs (DSP+logic hybrid, optimized constant multiplication)
-   - Any arithmetic optimization that reduces area/delay for modular operations
-
-**CRITICAL**: Do NOT extract butterfly-level innovations. The butterfly structure is fixed; only the modular reduction/multiplication matters.
-
-## What to SKIP (do NOT extract)
-{% else %}
-## What to extract (ONLY these two categories)
-
-**modular_arithmetic** — Novel modular multiplication or modular reduction algorithms for NTT/PQC. Examples:
+**modular_arithmetic** — A novel modular multiplication or modular reduction algorithm for PQC hardware. Examples:
    - New modular reduction (K-Red, LUT-based, Barrett, Montgomery variants)
    - New modular multiplier designs (DSP+logic hybrid, optimized constant multiplication)
    - Any arithmetic optimization that reduces area/delay for modular operations
 
 ## What to SKIP (do NOT extract)
-{% endif %}
 
-- Memory architectures (BRAM banking, ping-pong schemes, storage layouts)
-- Twiddle factor ROM/generation methods
-- Permutation networks, bit-reversal, reordering
-- Control FSMs, address generators, scheduling strategies
+- Transform structures, memory architectures, ROMs, permutation networks, control FSMs, address generators, and scheduling strategies
 - Encoding/decoding, serialization, I/O interfaces
 - Standard Montgomery/Barrett reduction (unless the paper proposes a novel variation)
-- Standard Cooley-Tukey/Gentleman-Sande butterfly (unless the structure itself is modified)
-- Polynomial multiplication architectures outside the butterfly
-- Top-level NTT integration architectures
+- Top-level system integration architectures
 
 ## Output format
 
@@ -43,7 +25,7 @@ Return a JSON object with this exact structure:
   "innovations": [
     {
       "module_name": "descriptive_snake_case_name",
-      "category": "modular_arithmetic or butterfly",
+      "category": "modular_arithmetic",
       "summary": "1-2 sentence description of the innovation",
       "hardware_spec": {
         "parameters": {
@@ -72,18 +54,17 @@ Return a JSON object with this exact structure:
 
 1. Each innovation must be an independently implementable hardware module.
 2. The hardware_spec must be detailed enough to generate Verilog from — include bit widths, cycle behavior, edge cases.
-3. If the paper has NO butterfly or modular arithmetic innovations, return an empty innovations list: `"innovations": []`.
+3. If the paper has NO modular-arithmetic innovation, return an empty innovations list: `"innovations": []`.
 4. If the paper proposes a modification to an existing structure, only capture the modified part (not the whole structure).
 5. Use the paper's exact parameter names and values where possible.
 6. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
-7. **correction_factor** — CRITICAL for modular multipliers. Some reduction algorithms do NOT output a true `a*b mod q`; they output `k*a*b mod q`, off by a known constant `k`. The classic case is K-reduction (Longa-Naehrig), where the modulus is written `q = k*2^x + 1` and the design computes `a*b*k mod q` (for Kyber, k=13). This factor is normally cancelled elsewhere in the NTT by pre-multiplying the twiddle factor by `k^-1 mod q`. Set `correction_factor` to that `k` (e.g. 13). If the algorithm produces a true `a*b mod q` with no such offset (Barrett, Montgomery-with-final-correction, plain schoolbook + reduction, LUT-only), set it to 1. Read the algorithm's stated Result/output carefully — if it says `r = a*b*k mod q`, the factor is k, not 1.
+7. **correction_factor** — CRITICAL for modular multipliers. Some reduction algorithms output `k*a*b mod q`, off by a known constant `k`, instead of `a*b mod q`. Set this field to that factor (for example, 13 for Kyber K-reduction). If the algorithm produces the ordinary reduced product, set it to 1. Read the algorithm's stated result carefully and preserve its actual output semantics.
 8. **latency_cycles** — for modular_arithmetic modules: the total number of clock cycles from when valid A/B appear at the module inputs to when R is valid at the output, counting EVERY register stage in the datapath INCLUDING the product register. Purely combinational reduction after the product register => latency_cycles = 1. A pipelined reduction with N register stages after P_R => latency_cycles = 1 + N. If unknown, set 0 (the pipeline applies a scheme default).
 9. **fpga_device** — the FPGA the paper's OWN implementation was tested on (look in the implementation / experimental-results section). Copy it EXACTLY as printed, including package and speed grade when given (e.g. `xc7a200tffg1156-3`). Papers usually report several devices when comparing against prior work — report the one the paper's own design was synthesized for, NOT the devices cited from other papers' results. If the paper gives only a device name (`XC7A100T`) or a family (`Artix-7`), report that. Use `""` if no device is stated. If the text below is marked as a truncated excerpt, never guess a device that might appear in the missing part — report `""`.
 
-{% if target_interface == "modmul" %}
 ## CRITICAL: Target Interface Constraint
 
-This modular multiplication module MUST match the following interface exactly (it will be a drop-in replacement for the reference `modmul.v`):
+The generated modular multiplication module MUST match the following interface exactly:
 
 ```verilog
 module modmul(
@@ -97,7 +78,7 @@ The module has TWO parts:
 1. **Fixed front-end** (NOT your concern): DSP multiplier `(* use_dsp = "yes" *) reg [{{pw_minus_1}}:0] P_DSP; always @* P_DSP = A * B;` and a register `P_R <= P_DSP`. This is boilerplate — do NOT describe it.
 2. **Modular reduction** (YOUR focus): logic that reduces the {{pw}}-bit product P_R down to a {{dw}}-bit R. **The reduction MAY be pipelined**: if the paper's design inserts register stages inside the reduction, describe those stages and their per-stage arithmetic faithfully — the generated Verilog will reproduce them. Do NOT invent extra pipeline stages that are not in the paper, and do NOT strip out stages the paper specifies.
 
-**Do NOT assume R = (A*B) mod {{q}}.** Report what the paper's algorithm ACTUALLY outputs. Many efficient designs (K-reduction and its variants) output `R = k*A*B mod {{q}}` — off by a constant `k` (e.g. 13) that the NTT cancels by pre-scaling twiddles with `k^-1`. Set `correction_factor` accordingly (see Rule 7). Describe the reduction faithfully, including the k factor if present; do not force-fit it to a plain `A*B mod q`.
+**Do NOT assume R = (A*B) mod {{q}}.** Report what the paper's algorithm ACTUALLY outputs. Some reduction algorithms output `R = k*A*B mod {{q}}`; set `correction_factor` accordingly and describe the reduction faithfully.
 
 **Apply these constraints to EVERY modular_arithmetic innovation you extract:**
 
@@ -107,8 +88,6 @@ The module has TWO parts:
 4. **Parameters**: Only include parameters relevant to the reduction algorithm (e.g., internal constants). Do NOT parameterize DATA_WIDTH or Q — these are fixed at {{dw}}-bit operands, Q={{q}}.
 5. **Focus**: Describe ONLY the modular reduction algorithm that maps P_R[{{pw_minus_1}}:0] → R[{{dw_minus_1}}:0]. Do NOT describe the DSP multiplier (P_DSP) or the product register — those are fixed boilerplate.
 6. **Context**: The {{pw}}-bit product P_R arrives from the DSP multiplier after 1 register stage. Your reduction logic reads P_R and produces R. Report the reduction's internal pipeline stages (if any) under `latency_cycles` (Rule 8).
-{% endif %}
-
 ## Paper text
 
 {{paper_text}}

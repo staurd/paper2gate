@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class PortSpec(BaseModel):
-    name: str
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*$")
     width: str  # e.g. "DATA_WIDTH", "2*DATA_WIDTH", "8"
     direction: str  # "input" | "output"
     desc: str = ""
@@ -17,8 +17,7 @@ class HardwareSpec(BaseModel):
     timing: str = ""
     constraints: str = ""
     # Constant factor the module's output is off by, relative to a true a*b mod q.
-    # K-reduction computes k*a*b mod q (k=13 for Kyber), cancelled in the NTT by
-    # pre-scaling twiddles with k^-1. Barrett/Montgomery/plain reduction => 1.
+    # K-reduction computes k*a*b mod q (k=13 for Kyber); plain reduction => 1.
     correction_factor: int = 1
     # Total clock cycles from valid A/B at the inputs to valid R at the output,
     # counting EVERY register stage including the product register.
@@ -27,8 +26,8 @@ class HardwareSpec(BaseModel):
 
 
 class ModuleSpec(BaseModel):
-    module_name: str
-    category: str  # e.g. "modular_arithmetic", "memory", "butterfly", "control"
+    module_name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*$")
+    category: str  # fixed to "modular_arithmetic" by the extraction prompt
     summary: str
     hardware_spec: HardwareSpec = Field(default_factory=HardwareSpec)
 

@@ -1,0 +1,9 @@
+Identify which PQC scheme the paper's proposed modular multiplication or reduction targets.
+
+Return ONLY a JSON object with exactly these fields:
+{"scheme": "kyber|dilithium|unknown|mixed", "evidence": "short supporting phrase from the excerpt"}
+
+Use "kyber" or "dilithium" when the proposed arithmetic clearly targets that scheme, even if the other scheme is mentioned for comparison. Use "mixed" when the proposed arithmetic targets both. Use "unknown" when the excerpt does not establish the target. Do not infer the target solely from a cited or compared scheme, and do not invent evidence from text outside the excerpt.
+
+Paper excerpt:
+{{paper_text}}

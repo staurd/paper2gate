@@ -1,7 +1,7 @@
 [project]
 name = "paper2gate"
 version = "0.1.0"
-description = "LLM-driven paper-to-Verilog code generation for PQC hardware"
+description = "LLM-driven paper-to-Verilog generation for modular multiplication hardware"
 requires-python = ">=3.10"
 dependencies = [
     "pymupdf>=1.24.0",

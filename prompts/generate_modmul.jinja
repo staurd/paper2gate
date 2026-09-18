@@ -8,7 +8,7 @@ The module interface and the multiplier front-end are NON-NEGOTIABLE. You MUST u
 module modmul(
     input         clk, rst,       // active-HIGH reset
     input  [{{dw_minus_1}}:0] A, B,       // operands in [0, {{q_minus_1}}]
-    output [{{dw_minus_1}}:0] R           // R = (A * B) mod {{q}}
+    output [{{dw_minus_1}}:0] R           // reduced product with the paper's correction factor
 );
 
     // ----- Fixed: DSP multiplier (do NOT modify) -----
@@ -28,7 +28,7 @@ module modmul(
 
     // ================================================
     // YOUR TASK: implement modular reduction below
-    // Compute R[{{dw_minus_1}}:0] = P_R[{{pw_minus_1}}:0] mod {{q}}
+    // Compute the paper's reduced product from P_R.
     // The result must be in range [0, {{q_minus_1}}].
     // ================================================
 
@@ -40,7 +40,7 @@ endmodule
 - **Module name**: `modmul` (exact)
 - **Ports**: `clk`, `rst`, `A[{{dw_minus_1}}:0]`, `B[{{dw_minus_1}}:0]` → `R[{{dw_minus_1}}:0]` — DO NOT change
 - **DSP multiplier (P_DSP) and product register (P_R)**: keep exactly as shown above, DO NOT modify
-- **Your job**: write the reduction logic that reduces `P_R[{{pw_minus_1}}:0]` to `R[{{dw_minus_1}}:0]` where R ≡ P_R (mod {{q}}) and 0 ≤ R < {{q}}
+- **Your job**: write the reduction logic that reduces `P_R[{{pw_minus_1}}:0]` to `R[{{dw_minus_1}}:0]` according to the paper's output semantics, with `correction_factor={{correction_factor}}`, and 0 ≤ R < {{q}}
 
 
 ## Paper's Innovation
@@ -70,7 +70,7 @@ Implement the modular reduction algorithm described below. The reduction takes `
 
 1. Output the COMPLETE module from `module modmul(` to `endmodule`, including the fixed skeleton
 2. The fixed parts (DSP multiplier P_DSP, product register P_R) MUST be included verbatim as shown above
-3. Your reduction logic MUST produce R = P_R mod {{q}} for all valid {{pw}}-bit inputs (P_R ≤ {{q_minus_1}}×{{q_minus_1}} = {{q_minus_1_sq}})
+3. Your reduction logic MUST produce the paper's reduced output for all valid {{pw}}-bit inputs (P_R ≤ {{q_minus_1}}×{{q_minus_1}} = {{q_minus_1_sq}}). If `correction_factor` is 1, this is P_R mod {{q}}; otherwise it is `correction_factor * P_R mod {{q}}`.
 4. The output R must be in range [0, {{q_minus_1}}]
 5. **Synthesizable RTL** — no initial, forever, $finish, or testbench constructs
 6. **Self-contained** — do NOT instantiate external sub-modules for the reduction. Write the reduction logic inline.

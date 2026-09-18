@@ -17,6 +17,7 @@ from src.schemes import KYBER, SchemeProfile, render_vars
 # live in the experimental-setup section near the END of the paper, so a tight
 # budget silently starves the model of exactly what it was asked for.
 DEFAULT_MAX_CHARS = 100000
+SCHEME_CONTEXT_CHARS = 2000
 
 _REFERENCES_RE = re.compile(r"^\s*(?:\d+\.?\s*)?(references|bibliography)\s*$", re.M | re.I)
 
@@ -31,7 +32,7 @@ def _resolve_max_chars(explicit: int | None) -> int:
         return DEFAULT_MAX_CHARS
 
 
-def _trim_references(paper_text: str) -> tuple[str, int]:
+def trim_references(paper_text: str) -> tuple[str, int]:
     """Drop the trailing references/bibliography section.
 
     References run 12-21% of a paper's extracted text and carry no hardware
@@ -55,12 +56,36 @@ def _trim_references(paper_text: str) -> tuple[str, int]:
     return paper_text[:last.start()], dropped
 
 
+def classify_scheme(paper_text: str, client: LLMClient) -> tuple[str, str]:
+    """Classify the paper's target modular arithmetic from its opening text."""
+    raw = client.generate_structured(
+        system_prompt=(
+            "Identify the target PQC scheme from the supplied paper excerpt. "
+            "Respond ONLY with valid JSON."
+        ),
+        user_prompt=load_prompt("classify_scheme.jinja", paper_text=paper_text[:SCHEME_CONTEXT_CHARS]),
+        stage="extract",
+    )
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid scheme classification JSON: {exc}") from exc
+    if not isinstance(result, dict):
+        raise ValueError("Scheme classification must be a JSON object")
+    scheme = result.get("scheme")
+    evidence = result.get("evidence")
+    if scheme not in ("kyber", "dilithium", "unknown", "mixed"):
+        raise ValueError(f"Invalid classified scheme: {scheme!r}")
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise ValueError("Scheme classification needs a non-empty evidence string")
+    return scheme, evidence.strip()
+
+
 def extract_innovations(
     paper_text: str,
     client: LLMClient,
     max_chars: int | None = None,
     max_retries: int = 2,
-    target_interface: str | None = None,
     scheme: SchemeProfile | None = None,
 ) -> PaperAnalysis:
     """
@@ -72,8 +97,6 @@ def extract_innovations(
     Retries on JSON parse failure with a stricter prompt.
 
     Args:
-        target_interface: If "modred", add target interface constraint
-                          so extracted ports match the reference modred.v.
         scheme: PQC scheme profile. Renders the fixed-interface constants
                 (operand widths, modulus) into the prompt. Defaults to KYBER
                 for backward compatibility with direct callers.
@@ -81,7 +104,7 @@ def extract_innovations(
     profile = scheme or KYBER
     limit = _resolve_max_chars(max_chars)
 
-    body, dropped_refs = _trim_references(paper_text)
+    body, dropped_refs = trim_references(paper_text)
     if dropped_refs:
         console.print(
             f"  Trimmed {dropped_refs:,} chars of references "
@@ -109,7 +132,6 @@ def extract_innovations(
         "extract_innovation.jinja",
         paper_text=truncated,
         truncation_note=truncation_note,
-        target_interface=target_interface,
         **render_vars(profile),
     )
 
@@ -148,13 +170,41 @@ def extract_innovations(
 
 def _parse_analysis(data: dict) -> PaperAnalysis:
     """Parse raw dict into validated Pydantic models."""
+    if not isinstance(data, dict):
+        raise ValueError("LLM response must be a JSON object")
+    raw_innovations = data.get("innovations", [])
+    if not isinstance(raw_innovations, list):
+        raise ValueError("'innovations' must be a JSON array")
+
     innovations = []
-    for item in data.get("innovations", []):
+    for index, item in enumerate(raw_innovations):
+        if not isinstance(item, dict):
+            raise ValueError(f"innovation[{index}] must be a JSON object")
+        if not isinstance(item.get("module_name"), str) or not item["module_name"].strip():
+            raise ValueError(f"innovation[{index}] is missing a module_name")
         hw = item.get("hardware_spec", {})
+        if not isinstance(hw, dict):
+            raise ValueError(f"innovation[{index}].hardware_spec must be an object")
 
         ports: dict[str, list[PortSpec]] = {}
+        raw_ports = hw.get("ports", {})
+        if raw_ports is None:
+            raw_ports = {}
+        if not isinstance(raw_ports, dict):
+            raise ValueError(f"innovation[{index}].hardware_spec.ports must be an object")
         for direction in ("input", "output"):
-            port_list = hw.get("ports", {}).get(direction, [])
+            port_list = raw_ports.get(direction, [])
+            if not isinstance(port_list, list):
+                raise ValueError(
+                    f"innovation[{index}].hardware_spec.ports.{direction} must be an array"
+                )
+            normalized_ports = []
+            for port_index, port in enumerate(port_list):
+                if not isinstance(port, dict) or not isinstance(port.get("name"), str):
+                    raise ValueError(
+                        f"innovation[{index}] {direction} port[{port_index}] needs a name"
+                    )
+                normalized_ports.append(port)
             ports[direction] = [
                 PortSpec(
                     name=p["name"],
@@ -162,7 +212,7 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
                     direction=direction,
                     desc=p.get("desc", ""),
                 )
-                for p in port_list
+                for p in normalized_ports
             ]
 
         try:
@@ -175,8 +225,14 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
         except (TypeError, ValueError):
             latency_cycles = 0
 
+        raw_parameters = hw.get("parameters", {})
+        if raw_parameters is None:
+            raw_parameters = {}
+        if not isinstance(raw_parameters, dict):
+            raise ValueError(f"innovation[{index}].hardware_spec.parameters must be an object")
+
         hardware_spec = HardwareSpec(
-            parameters=hw.get("parameters", {}),
+            parameters={str(k): str(v) for k, v in raw_parameters.items()},
             ports=ports,
             behavior=hw.get("behavior", ""),
             timing=hw.get("timing", ""),

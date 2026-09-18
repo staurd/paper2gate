@@ -1,4 +1,4 @@
-"""Run Vivado synthesis on generated butterfly and extract resource usage."""
+"""Run Vivado synthesis on generated modmul and extract resource usage."""
 
 import re
 import shutil
@@ -80,44 +80,44 @@ def _find_vivado() -> str:
     found = shutil.which("vivado")
     if found:
         return found
-    # Common locations
-    for base in ["C:/Xilinx", "D:/Xilinx", "D:/Vivado2018.3", "C:/Vivado"]:
-        for root, dirs, _ in Path(base).glob("**/bin"):
-            vivado_exe = Path(str(root)) / "vivado.bat"
-            if vivado_exe.exists():
-                return str(vivado_exe)
     return "vivado"
+
+
+def vivado_available() -> bool:
+    """Return whether the configured Vivado executable can be launched."""
+    binary = _find_vivado()
+    return Path(binary).exists() or shutil.which(binary) is not None
 
 
 def run_synthesis(
     verilog_files: list[str],
-    top: str,
     output_dir: Path,
     part: str = DEFAULT_PART,
 ) -> dict | None:
     """
     Run Vivado synthesis and return resource counts.
 
-    Reports go to <output_dir>/synthesis/<top>/ so the several synthesis runs
-    of one invocation (modmul, then butterfly) do not overwrite each other's
-    utilization.rpt / _synth.tcl.
+    Reports go to <output_dir>/synthesis/modmul/.
 
     Returns dict with LUT/FF/DSP/BRAM keys, or None on failure.
     """
+    if not verilog_files:
+        console.print("    [red]No Verilog sources supplied for synthesis[/red]")
+        return None
     vivado = _find_vivado()
     # Everything Vivado is handed (the tcl, the sources it reads, the reports
     # it writes) is resolved first: Vivado resolves them against its own CWD,
     # not ours.
     verilog_files = [str(Path(f).resolve()) for f in verilog_files]
-    output_dir = (Path(output_dir) / "synthesis" / top).resolve()
+    output_dir = (Path(output_dir) / "synthesis" / "modmul").resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Write TCL script using absolute paths for robustness
-    tcl = _generate_tcl(verilog_files, top, part, output_dir)
+    tcl = _generate_tcl(verilog_files, part, output_dir)
     tcl_path = output_dir / "_synth.tcl"
     tcl_path.write_text(tcl, encoding="utf-8")
 
-    console.print(f"    Part: [cyan]{part}[/cyan]   (top: {top})")
+    console.print(f"    Part: [cyan]{part}[/cyan]   (top: modmul)")
     console.print("    Running Vivado synthesis (~20s)...")
     try:
         result = subprocess.run(
@@ -125,6 +125,8 @@ def run_synthesis(
             capture_output=True, text=True, timeout=120,
             cwd=str(output_dir),
         )
+        (output_dir / "vivado_stdout.log").write_text(result.stdout, encoding="utf-8", errors="replace")
+        (output_dir / "vivado_stderr.log").write_text(result.stderr, encoding="utf-8", errors="replace")
     except FileNotFoundError:
         console.print("    [yellow]Vivado not found — skipping synthesis[/yellow]")
         return None
@@ -134,7 +136,8 @@ def run_synthesis(
 
     if result.returncode != 0:
         console.print("    [red]Vivado synthesis failed[/red]")
-        for line in result.stderr.strip().split("\n")[:3]:
+        diagnostic = result.stderr.strip() or result.stdout.strip()
+        for line in diagnostic.split("\n")[:3]:
             console.print(f"      [dim]{line.strip()}[/dim]")
         return None
 
@@ -148,13 +151,16 @@ def run_synthesis(
     return None
 
 
-def _generate_tcl(verilog_files: list[str], top: str, part: str, out_dir: Path) -> str:
-    reads = "\n".join(f"read_verilog {{{f}}}" for f in verilog_files)
+def _generate_tcl(verilog_files: list[str], part: str, out_dir: Path) -> str:
+    reads = "\n".join(
+        f"read_verilog {{{str(Path(f).resolve()).replace(chr(92), '/') }}}"
+        for f in verilog_files
+    )
     util_path = str(out_dir / "utilization.rpt").replace("\\", "/")
     time_path = str(out_dir / "timing.rpt").replace("\\", "/")
     return f"""
 {reads}
-synth_design -top {top} -part {part}
+synth_design -top modmul -part {part}
 report_utilization -file {{{util_path}}}
 report_timing -file {{{time_path}}}
 puts "=== SYNTH DONE ==="

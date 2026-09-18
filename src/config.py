@@ -1,15 +1,29 @@
-"""Unified configuration loaded once from config.yaml. All modules import from here."""
+"""Project configuration loaded from the repository's config.yaml."""
 
-import functools
 import os
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+
+# Load local development secrets before resolving ${ENV_VAR} references.
+load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _resolve_tool_path(value: str) -> str:
+    """Resolve a relative configured tool path against the project root."""
+    if not value:
+        return value
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    project_path = PROJECT_ROOT / path
+    return str(project_path) if project_path.exists() else value
 
 
 def _resolve_env(value: str) -> str:
@@ -30,27 +44,47 @@ def _resolve_env_recursive(obj: Any) -> Any:
     return obj
 
 
-@functools.lru_cache(maxsize=1)
 def load_config() -> dict:
-    """Load and cache config.yaml with env var resolution. Returns the full dict."""
-    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    """Load the repository config with environment-variable expansion."""
+    if not CONFIG_PATH.exists():
+        raise FileNotFoundError(f"Configuration file not found: {CONFIG_PATH}")
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
     return _resolve_env_recursive(raw)
 
 
 def get_llm_config() -> dict:
-    return load_config().get("llm", {})
+    cfg = dict(load_config().get("llm", {}))
+    provider = str(cfg.get("provider", "")).lower()
+    env_names = {
+        "deepseek": "DEEPSEEK_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+    }
+    env_name = env_names.get(provider)
+    if env_name and os.environ.get(env_name):
+        cfg["api_key"] = os.environ[env_name]
+    return cfg
 
 
 def get_iverilog_config() -> dict:
-    return load_config().get("iverilog", {})
-
-
-def get_yosys_config() -> dict:
-    return load_config().get("yosys", {})
+    cfg = dict(load_config().get("iverilog", {}))
+    cfg["binary"] = _resolve_tool_path(
+        os.environ.get("PAPER2GATE_IVERILOG_BINARY")
+        or str(cfg.get("binary") or "")
+        or "iverilog"
+    )
+    cfg.setdefault("flags", "-g2012")
+    return cfg
 
 
 def get_vivado_config() -> dict:
-    return load_config().get("vivado", {})
+    cfg = dict(load_config().get("vivado", {}))
+    cfg["binary"] = _resolve_tool_path(
+        os.environ.get("PAPER2GATE_VIVADO_BINARY")
+        or str(cfg.get("binary") or "")
+        or "vivado"
+    )
+    return cfg
 
 
 def get_output_config() -> dict:
