@@ -10,12 +10,52 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import load_config  # noqa: E402
-from src.ir_models import PaperAnalysis  # noqa: E402
+from src.code_generator import _fix_from_iverilog, fix_from_verification, generate_modmul  # noqa: E402
+from src.innovation_extractor import classify_scheme, extract_innovations  # noqa: E402
+from src.ir_models import HardwareSpec, ModuleSpec, PaperAnalysis  # noqa: E402
 from src.llm_client import LLMClient  # noqa: E402
 from src.main import PipelineError, run_pipeline  # noqa: E402
 from src.schemes import DILITHIUM, KYBER, resolve_scheme  # noqa: E402
 from src.verilog_utils import validate_modmul_interface  # noqa: E402
 from src.vivado_report import DEFAULT_PART, resolve_part  # noqa: E402
+
+
+VALID_MODMUL = """module modmul(
+    input clk, rst,
+    input [11:0] A, B,
+    output [11:0] R
+);
+    reg [23:0] P_DSP;
+    reg [23:0] P_R;
+    always @* P_DSP = A * B;
+    always @(posedge clk or posedge rst) begin
+        if (rst) P_R <= 0;
+        else P_R <= P_DSP;
+    end
+    assign R = P_R[11:0];
+endmodule"""
+
+
+class RecordingClient:
+    def __init__(self, response: str):
+        self.response = response
+        self.calls = []
+
+    def generate_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
+def make_timing_client() -> LLMClient:
+    client = object.__new__(LLMClient)
+    client.provider = "openai"
+    client.model = "test"
+    client.extract_model = "test"
+    client.generate_model = "test"
+    client.max_tokens = 32
+    client.temperature = 0.0
+    client._timings = LLMClient._empty_timing_data()
+    return client
 
 
 def main() -> None:
@@ -25,6 +65,56 @@ def main() -> None:
 
     assert resolve_scheme("kyber") is KYBER
     assert resolve_scheme("dilithium") is DILITHIUM
+
+    timed = make_timing_client()
+    with patch("src.llm_client.time.perf_counter", side_effect=[100.0, 102.5]), \
+         patch.object(timed, "_call_openai_raw", return_value="ok"):
+        assert timed.generate_structured("system", "user", operation="generate_modmul") == "ok"
+    assert timed.timing_snapshot()["llm_calls"] == 1
+    assert timed.timing_snapshot()["llm_seconds"] == 2.5
+    assert timed.timing_snapshot()["llm_by_operation"]["generate_modmul"] == {"calls": 1, "seconds": 2.5}
+
+    timed_retry = make_timing_client()
+    with patch("src.llm_client.time.perf_counter", side_effect=[200.0, 204.0]), \
+         patch("src.llm_client.time.sleep"), \
+         patch.object(timed_retry, "_call_openai_raw", side_effect=[RuntimeError("temporary"), "ok"]):
+        assert timed_retry.generate_structured("system", "user", max_retries=1, operation="fix_syntax") == "ok"
+    assert timed_retry.timing_snapshot()["llm_by_operation"]["fix_syntax"] == {"calls": 2, "seconds": 4.0}
+
+    timed_failure = make_timing_client()
+    with patch("src.llm_client.time.perf_counter", side_effect=[300.0, 306.0]), \
+         patch("src.llm_client.time.sleep"), \
+         patch.object(timed_failure, "_call_openai_raw", side_effect=[RuntimeError("failed")] * 3):
+        try:
+            timed_failure.generate_structured("system", "user", max_retries=2, operation="fix_function")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("final LLM failure should be raised")
+    assert timed_failure.timing_snapshot()["llm_by_operation"]["fix_function"] == {"calls": 3, "seconds": 6.0}
+
+    classifier = RecordingClient('{"scheme":"kyber","evidence":"Kyber target"}')
+    classify_scheme("Kyber modular reduction", classifier)
+    assert classifier.calls[-1]["operation"] == "classify_scheme"
+    extractor = RecordingClient('{"paper_title":"test","innovations":[]}')
+    extract_innovations("Kyber modular reduction", extractor, scheme=KYBER)
+    assert extractor.calls[-1]["operation"] == "extract_innovations"
+    spec = ModuleSpec(
+        module_name="modmul",
+        category="modular_arithmetic",
+        summary="",
+        hardware_spec=HardwareSpec(),
+    )
+    generator = RecordingClient(VALID_MODMUL)
+    generate_modmul(spec, generator, scheme=KYBER)
+    assert generator.calls[-1]["operation"] == "generate_modmul"
+    syntax_fixer = RecordingClient(VALID_MODMUL)
+    _fix_from_iverilog(spec, VALID_MODMUL, "syntax error", syntax_fixer)
+    assert syntax_fixer.calls[-1]["operation"] == "fix_syntax"
+    function_fixer = RecordingClient(VALID_MODMUL)
+    fix_from_verification(spec, VALID_MODMUL, "functional failure", function_fixer)
+    assert function_fixer.calls[-1]["operation"] == "fix_function"
+
     with tempfile.TemporaryDirectory() as temp_dir:
         for name, profile in (("kyber", KYBER), ("dilithium", DILITHIUM)):
             body = (
@@ -39,6 +129,7 @@ def main() -> None:
                 output_dir = run_pipeline(f"{name}.pdf", output_base=temp_dir, dry_run=True)
             prompt = client_class.return_value.generate_structured.call_args.kwargs["user_prompt"]
             assert client_class.return_value.generate_structured.call_args.kwargs["stage"] == "extract"
+            assert client_class.return_value.generate_structured.call_args.kwargs["operation"] == "classify_scheme"
             assert prompt.split("Paper excerpt:\n", 1)[1].strip() == body[:2000].strip()
             assert "LATE_BODY_MARKER" not in prompt
             assert (output_dir / "extracted_text" / "full_text.txt").read_text(encoding="utf-8") == raw_text
@@ -49,6 +140,8 @@ def main() -> None:
             assert summary["scheme"]["source"] == "llm"
             assert summary["scheme"]["evidence"] == evidence
             assert summary["stages"]["classify_scheme"]["status"] == "passed"
+            assert "timing" in summary
+            assert "llm_seconds" in summary["timing"]
 
         for label, response in (
             ("unknown", '{"scheme":"unknown","evidence":"not stated"}'),
@@ -73,6 +166,8 @@ def main() -> None:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             assert summary["status"] == "failed"
             assert summary["stages"]["classify_scheme"]["status"] == "failed"
+            assert "timing" in summary
+            assert summary["timing"]["llm_calls"] == 0
             if label in ("unknown", "mixed"):
                 assert summary["scheme"]["name"] == label
                 assert summary["scheme"]["source"] == "llm"
@@ -90,20 +185,7 @@ def main() -> None:
     assert resolve_part("")[0] == DEFAULT_PART
     assert LLMClient._extract_json("prefix\n```json\n{\"ok\": true}\n```") == '{"ok": true}'
 
-    valid_modmul = """module modmul(
-        input clk, rst,
-        input [11:0] A, B,
-        output [11:0] R
-    );
-        reg [23:0] P_DSP;
-        reg [23:0] P_R;
-        always @* P_DSP = A * B;
-        always @(posedge clk or posedge rst) begin
-            if (rst) P_R <= 0;
-            else P_R <= P_DSP;
-        end
-        assign R = P_R[11:0];
-    endmodule"""
+    valid_modmul = VALID_MODMUL
     assert validate_modmul_interface(valid_modmul, 12) == []
     invalid_modmul = valid_modmul.replace("assign R = P_R[11:0];", "assign R = P_R % 3329;")
     assert validate_modmul_interface(invalid_modmul, 12)

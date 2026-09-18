@@ -130,6 +130,7 @@ def _fix_from_iverilog(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         stage="generate",
+        operation="fix_syntax",
     )
     fixed = extract_verilog(raw)
 
@@ -182,6 +183,7 @@ def generate_modmul(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             stage="generate",
+            operation="generate_modmul",
         )
         verilog = extract_verilog(raw)
 
@@ -300,6 +302,7 @@ def fix_from_verification(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         stage="generate",
+        operation="fix_function",
     )
 
     fixed = extract_verilog(raw)

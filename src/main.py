@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +40,39 @@ from src.vivado_report import (
 
 class PipelineError(RuntimeError):
     """A required pipeline stage failed."""
+
+
+LLM_TIMING_OPERATIONS = (
+    "classify_scheme",
+    "extract_innovations",
+    "generate_modmul",
+    "fix_syntax",
+    "fix_function",
+)
+
+
+def _empty_llm_timing() -> dict:
+    return {
+        "llm_seconds": 0.0,
+        "llm_calls": 0,
+        "llm_by_operation": {
+            operation: {"calls": 0, "seconds": 0.0}
+            for operation in LLM_TIMING_OPERATIONS
+        },
+    }
+
+
+def _update_timing(summary: dict, pipeline_started: float, client: LLMClient | None) -> None:
+    timing = _empty_llm_timing()
+    if client is not None:
+        try:
+            client_timing = client.timing_snapshot()
+        except (AttributeError, TypeError, ValueError):
+            client_timing = None
+        if isinstance(client_timing, dict):
+            timing.update(client_timing)
+    timing["pipeline_seconds"] = round(time.perf_counter() - pipeline_started, 3)
+    summary["timing"] = timing
 
 
 def build_output_dir(pdf_path: str, base_dir: str = "outputs") -> Path:
@@ -135,10 +169,13 @@ def run_pipeline(
 ) -> Path:
     """Run the paper-to-Verilog pipeline and write a machine-readable summary."""
     output_dir: Path | None = None
+    client: LLMClient | None = None
+    pipeline_started = time.perf_counter()
     summary = {
         "paper": str(Path(pdf_path).resolve()),
         "status": "running",
         "scheme": None,
+        "timing": {"pipeline_seconds": 0.0, **_empty_llm_timing()},
         "tools": {
             "iverilog": get_iverilog_config().get("binary"),
             "vivado": get_vivado_config().get("binary"),
@@ -223,6 +260,7 @@ def run_pipeline(
         if not analysis.innovations:
             _set_stage(summary, "generate", "skipped", "No innovations found")
             summary["status"] = "passed"
+            _update_timing(summary, pipeline_started, client)
             _write_summary(output_dir, summary)
             console.print("[yellow]No innovations found in the paper.[/yellow]")
             return output_dir
@@ -232,6 +270,7 @@ def run_pipeline(
             _set_stage(summary, "verification", "skipped", "--dry-run")
             _set_stage(summary, "synthesis_modmul", "skipped", "--dry-run")
             summary["status"] = "passed"
+            _update_timing(summary, pipeline_started, client)
             _write_summary(output_dir, summary)
             console.print("[yellow]--dry-run: skipping Verilog generation.[/yellow]")
             return output_dir
@@ -390,6 +429,7 @@ def run_pipeline(
 
         statuses = [stage["status"] for stage in summary["stages"].values()]
         summary["status"] = "unverified" if "unverified" in statuses or "unavailable" in statuses else "passed"
+        _update_timing(summary, pipeline_started, client)
         _write_summary(output_dir, summary)
         if summary["status"] == "passed":
             console.print(f"\n[bold green]Done![/bold green] All outputs in: {output_dir}")
@@ -403,6 +443,7 @@ def run_pipeline(
         summary["status"] = "failed"
         summary["error"] = str(exc)
         if output_dir is not None:
+            _update_timing(summary, pipeline_started, client)
             _write_summary(output_dir, summary)
         raise
 
@@ -458,7 +499,7 @@ def main() -> None:
         console.print("[red]Error: PDF not found:[/red] " + ", ".join(missing))
         sys.exit(1)
 
-    results: list[tuple[str, str | None, str, str | None]] = []
+    results: list[tuple[str, str | None, str, str | None, float | None]] = []
     for i, pdf in enumerate(pdfs, 1):
         console.print(Panel.fit(f"[bold]Paper {i}/{len(pdfs)}: {pdf}[/bold]", style="cyan"))
         try:
@@ -473,30 +514,35 @@ def main() -> None:
                 part=args.part,
             )
             summary = json.loads((output_dir / "run_summary.json").read_text(encoding="utf-8"))
-            results.append((pdf, str(output_dir), summary.get("status", "passed"), None))
+            llm_seconds = summary.get("timing", {}).get("llm_seconds")
+            if not isinstance(llm_seconds, (int, float)):
+                llm_seconds = None
+            results.append((pdf, str(output_dir), summary.get("status", "passed"), None, llm_seconds))
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted by user[/yellow]")
             sys.exit(130)
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-            results.append((pdf, None, "failed", str(exc)))
+            results.append((pdf, None, "failed", str(exc), None))
 
     table = Table(title="Batch Results", show_header=True)
     table.add_column("#", justify="right")
     table.add_column("Paper", overflow="fold")
     table.add_column("Status")
+    table.add_column("LLM Time")
     table.add_column("Outputs")
-    for i, (paper, output_dir, status, error) in enumerate(results, 1):
+    for i, (paper, output_dir, status, error, llm_seconds) in enumerate(results, 1):
         label = {
             "passed": "[green]PASSED[/green]",
             "unverified": "[yellow]UNVERIFIED[/yellow]",
             "failed": "[red]FAILED[/red]",
         }.get(status, status.upper())
-        table.add_row(str(i), paper, label, output_dir or error or "")
+        llm_label = f"{llm_seconds:.3f}s" if llm_seconds is not None else "n/a"
+        table.add_row(str(i), paper, label, llm_label, output_dir or error or "")
     console.print(table)
 
-    failed = sum(status == "failed" for _, _, status, _ in results)
-    unverified = sum(status == "unverified" for _, _, status, _ in results)
+    failed = sum(status == "failed" for _, _, status, _, _ in results)
+    unverified = sum(status == "unverified" for _, _, status, _, _ in results)
     passed = len(results) - failed - unverified
     console.print(
         f"[bold green]{passed} passed[/bold green], "

@@ -65,6 +65,7 @@ def classify_scheme(paper_text: str, client: LLMClient) -> tuple[str, str]:
         ),
         user_prompt=load_prompt("classify_scheme.jinja", paper_text=paper_text[:SCHEME_CONTEXT_CHARS]),
         stage="extract",
+        operation="classify_scheme",
     )
     try:
         result = json.loads(raw)
@@ -156,6 +157,7 @@ def extract_innovations(
             system_prompt=system_prompt,
             user_prompt=user_prompt + retry_hint,
             stage="extract",
+            operation="extract_innovations",
         )
 
         try:
