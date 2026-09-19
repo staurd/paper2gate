@@ -38,7 +38,7 @@ Empty tool paths in `config.yaml` mean that the executable is searched on `PATH`
 
 Every run extracts exactly one modular-arithmetic innovation and generates the fixed-interface `modmul` module. Vivado, when enabled, synthesizes that generated module as the top-level design.
 
-Each run writes `run_summary.json` with stage status and timing. The `timing` object reports total pipeline time, total LLM time/calls, and LLM time by operation (`classify_scheme`, `extract_innovations`, `generate_modmul`, `fix_syntax`, and `fix_function`). `passed`, `failed`, `skipped`, `unverified`, and `unavailable` are kept distinct. Vivado is optional for generation and simulation, but resource results are unavailable without it.
+Each run writes `run_summary.json` with stage status, timing, and FPGA resources. The `timing` object reports total pipeline time, total LLM time/calls, and LLM time by operation (`classify_scheme`, `extract_innovations`, `generate_modmul`, `fix_syntax`, and `fix_function`). The top-level `resources` object reports `LUT`, `FF`, `DSP`, and `BRAM`; values are `null` when synthesis is skipped or unavailable. `passed`, `failed`, `skipped`, `unverified`, and `unavailable` are kept distinct. Vivado is optional for generation and simulation, but resource results are unavailable without it.
 
 ## Offline smoke check
 

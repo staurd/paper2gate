@@ -17,6 +17,9 @@ dependencies = [
 [project.scripts]
 paper2gate = "src.main:main"
 
+[tool.setuptools]
+packages = ["src"]
+
 [build-system]
 requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"

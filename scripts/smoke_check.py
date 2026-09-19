@@ -3,8 +3,11 @@
 import json
 import sys
 import tempfile
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
+
+from rich.console import Console
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -12,9 +15,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.config import load_config  # noqa: E402
 from src.code_generator import _fix_from_iverilog, fix_from_verification, generate_modmul  # noqa: E402
 from src.innovation_extractor import classify_scheme, extract_innovations  # noqa: E402
-from src.ir_models import HardwareSpec, ModuleSpec, PaperAnalysis  # noqa: E402
+from src.ir_models import GeneratedModule, HardwareSpec, ModuleSpec, PaperAnalysis  # noqa: E402
 from src.llm_client import LLMClient  # noqa: E402
-from src.main import PipelineError, run_pipeline  # noqa: E402
+from src.main import (  # noqa: E402
+    PipelineError,
+    _batch_result_from_summary,
+    _build_batch_results_table,
+    run_pipeline,
+)
 from src.schemes import DILITHIUM, KYBER, resolve_scheme  # noqa: E402
 from src.verilog_utils import validate_modmul_interface  # noqa: E402
 from src.vivado_report import DEFAULT_PART, resolve_part  # noqa: E402
@@ -182,6 +190,62 @@ def main() -> None:
         summary = json.loads((output_dir / "run_summary.json").read_text(encoding="utf-8"))
         assert summary["scheme"]["source"] == "cli"
         assert summary["stages"]["classify_scheme"]["status"] == "skipped"
+        assert summary["resources"] == {"LUT": None, "FF": None, "DSP": None, "BRAM": None}
+
+        synth_stats = {"LUT": 124, "FF": 18, "DSP": 2, "BRAM": 0}
+        synth_analysis = PaperAnalysis(
+            paper_title="synthesis test",
+            innovations=[
+                ModuleSpec(
+                    module_name="modmul",
+                    category="modular_arithmetic",
+                    summary="test implementation",
+                    hardware_spec=HardwareSpec(),
+                )
+            ],
+        )
+        with patch("src.main.extract_text", return_value="Manual Kyber paper"), \
+             patch("src.main.LLMClient"), \
+             patch("src.main.extract_innovations", return_value=synth_analysis), \
+             patch(
+                 "src.main.generate_modmul",
+                 return_value=GeneratedModule(module_name="modmul", verilog_code=VALID_MODMUL),
+             ), \
+             patch("src.main.vivado_available", return_value=True), \
+             patch("src.main.run_synthesis", return_value=synth_stats):
+            output_dir = run_pipeline(
+                "synthesis.pdf",
+                output_base=temp_dir,
+                use_review=False,
+                use_verify=False,
+                scheme="kyber",
+                part=DEFAULT_PART,
+            )
+        summary = json.loads((output_dir / "run_summary.json").read_text(encoding="utf-8"))
+        assert summary["resources"] == synth_stats
+
+    populated = _batch_result_from_summary(
+        "paper.pdf",
+        {
+            "status": "passed",
+            "timing": {"llm_seconds": 1.25, "pipeline_seconds": 2.5},
+            "resources": {"LUT": 124, "FF": 18, "DSP": 2, "BRAM": 0},
+        },
+    )
+    unavailable = _batch_result_from_summary("unavailable.pdf", {"status": "failed"})
+    batch_table = _build_batch_results_table([populated, unavailable])
+    rendered_output = StringIO()
+    Console(file=rendered_output, width=200, color_system=None).print(batch_table)
+    rendered_table = rendered_output.getvalue()
+    assert "Outputs" not in rendered_table
+    assert all(
+        heading in rendered_table
+        for heading in ("LLM Time", "Total Time", "LUT", "FF", "DSP", "BRAM")
+    )
+    assert "1.250s" in rendered_table
+    assert "2.500s" in rendered_table
+    assert "124" in rendered_table
+    assert rendered_table.count("n/a") >= 6
     assert resolve_part("")[0] == DEFAULT_PART
     assert LLMClient._extract_json("prefix\n```json\n{\"ok\": true}\n```") == '{"ok": true}'
 

@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -50,6 +51,8 @@ LLM_TIMING_OPERATIONS = (
     "fix_function",
 )
 
+RESOURCE_NAMES = ("LUT", "FF", "DSP", "BRAM")
+
 
 def _empty_llm_timing() -> dict:
     return {
@@ -60,6 +63,25 @@ def _empty_llm_timing() -> dict:
             for operation in LLM_TIMING_OPERATIONS
         },
     }
+
+
+def _empty_resources() -> dict[str, int | float | None]:
+    return {name: None for name in RESOURCE_NAMES}
+
+
+def _optional_number(value: object) -> int | float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _normalize_resources(value: object) -> dict[str, int | float | None]:
+    resources = _empty_resources()
+    if not isinstance(value, dict):
+        return resources
+    for name in RESOURCE_NAMES:
+        resources[name] = _optional_number(value.get(name))
+    return resources
 
 
 def _update_timing(summary: dict, pipeline_started: float, client: LLMClient | None) -> None:
@@ -176,6 +198,7 @@ def run_pipeline(
         "status": "running",
         "scheme": None,
         "timing": {"pipeline_seconds": 0.0, **_empty_llm_timing()},
+        "resources": _empty_resources(),
         "tools": {
             "iverilog": get_iverilog_config().get("binary"),
             "vivado": get_vivado_config().get("binary"),
@@ -418,6 +441,7 @@ def run_pipeline(
                 if modmul_stats is None:
                     _set_stage(summary, "synthesis_modmul", "failed")
                     raise PipelineError("Vivado synthesis failed for modmul")
+                summary["resources"] = _normalize_resources(modmul_stats)
                 _set_stage(summary, "synthesis_modmul", "passed", str(output_dir / "synthesis" / "modmul"))
         else:
             _set_stage(
@@ -463,6 +487,68 @@ def expand_pdf_paths(pdf_args: list[str]) -> list[str]:
     return expanded
 
 
+@dataclass
+class _BatchResult:
+    paper: str
+    status: str
+    llm_seconds: int | float | None = None
+    total_seconds: int | float | None = None
+    resources: dict[str, int | float | None] = field(default_factory=_empty_resources)
+
+
+def _batch_result_from_summary(pdf: str, summary: dict) -> _BatchResult:
+    timing = summary.get("timing")
+    if not isinstance(timing, dict):
+        timing = {}
+    status = summary.get("status", "passed")
+    if not isinstance(status, str):
+        status = "passed"
+    return _BatchResult(
+        paper=pdf,
+        status=status,
+        llm_seconds=_optional_number(timing.get("llm_seconds")),
+        total_seconds=_optional_number(timing.get("pipeline_seconds")),
+        resources=_normalize_resources(summary.get("resources")),
+    )
+
+
+def _format_seconds(seconds: int | float | None) -> str:
+    return f"{seconds:.3f}s" if seconds is not None else "n/a"
+
+
+def _build_batch_results_table(results: list[_BatchResult]) -> Table:
+    table = Table(title="Batch Results", show_header=True)
+    table.add_column("#", justify="right")
+    table.add_column("Paper", overflow="fold")
+    table.add_column("Status")
+    table.add_column("LLM Time", justify="right")
+    table.add_column("Total Time", justify="right")
+    for name in RESOURCE_NAMES:
+        table.add_column(name, justify="right")
+
+    for i, result in enumerate(results, 1):
+        label = {
+            "passed": "[green]PASSED[/green]",
+            "unverified": "[yellow]UNVERIFIED[/yellow]",
+            "failed": "[red]FAILED[/red]",
+        }.get(result.status, result.status.upper())
+        resource_labels = [
+            str(result.resources[name])
+            if result.resources.get(name) is not None
+            else "n/a"
+            for name in RESOURCE_NAMES
+        ]
+        table.add_row(
+            str(i),
+            result.paper,
+            label,
+            _format_seconds(result.llm_seconds),
+            _format_seconds(result.total_seconds),
+            *resource_labels,
+        )
+    return table
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Paper2Gate — Generate modular-arithmetic Verilog from academic papers"
@@ -499,7 +585,7 @@ def main() -> None:
         console.print("[red]Error: PDF not found:[/red] " + ", ".join(missing))
         sys.exit(1)
 
-    results: list[tuple[str, str | None, str, str | None, float | None]] = []
+    results: list[_BatchResult] = []
     for i, pdf in enumerate(pdfs, 1):
         console.print(Panel.fit(f"[bold]Paper {i}/{len(pdfs)}: {pdf}[/bold]", style="cyan"))
         try:
@@ -514,35 +600,18 @@ def main() -> None:
                 part=args.part,
             )
             summary = json.loads((output_dir / "run_summary.json").read_text(encoding="utf-8"))
-            llm_seconds = summary.get("timing", {}).get("llm_seconds")
-            if not isinstance(llm_seconds, (int, float)):
-                llm_seconds = None
-            results.append((pdf, str(output_dir), summary.get("status", "passed"), None, llm_seconds))
+            results.append(_batch_result_from_summary(pdf, summary))
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted by user[/yellow]")
             sys.exit(130)
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-            results.append((pdf, None, "failed", str(exc), None))
+            results.append(_BatchResult(paper=pdf, status="failed"))
 
-    table = Table(title="Batch Results", show_header=True)
-    table.add_column("#", justify="right")
-    table.add_column("Paper", overflow="fold")
-    table.add_column("Status")
-    table.add_column("LLM Time")
-    table.add_column("Outputs")
-    for i, (paper, output_dir, status, error, llm_seconds) in enumerate(results, 1):
-        label = {
-            "passed": "[green]PASSED[/green]",
-            "unverified": "[yellow]UNVERIFIED[/yellow]",
-            "failed": "[red]FAILED[/red]",
-        }.get(status, status.upper())
-        llm_label = f"{llm_seconds:.3f}s" if llm_seconds is not None else "n/a"
-        table.add_row(str(i), paper, label, llm_label, output_dir or error or "")
-    console.print(table)
+    console.print(_build_batch_results_table(results))
 
-    failed = sum(status == "failed" for _, _, status, _, _ in results)
-    unverified = sum(status == "unverified" for _, _, status, _, _ in results)
+    failed = sum(result.status == "failed" for result in results)
+    unverified = sum(result.status == "unverified" for result in results)
     passed = len(results) - failed - unverified
     console.print(
         f"[bold green]{passed} passed[/bold green], "
