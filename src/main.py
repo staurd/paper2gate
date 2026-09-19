@@ -75,6 +75,12 @@ def _optional_number(value: object) -> int | float | None:
     return None
 
 
+def _optional_text(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _normalize_resources(value: object) -> dict[str, int | float | None]:
     resources = _empty_resources()
     if not isinstance(value, dict):
@@ -491,6 +497,7 @@ def expand_pdf_paths(pdf_args: list[str]) -> list[str]:
 class _BatchResult:
     paper: str
     status: str
+    part: str | None = None
     llm_seconds: int | float | None = None
     total_seconds: int | float | None = None
     resources: dict[str, int | float | None] = field(default_factory=_empty_resources)
@@ -506,6 +513,7 @@ def _batch_result_from_summary(pdf: str, summary: dict) -> _BatchResult:
     return _BatchResult(
         paper=pdf,
         status=status,
+        part=_optional_text(summary.get("synthesis_part")),
         llm_seconds=_optional_number(timing.get("llm_seconds")),
         total_seconds=_optional_number(timing.get("pipeline_seconds")),
         resources=_normalize_resources(summary.get("resources")),
@@ -521,6 +529,7 @@ def _build_batch_results_table(results: list[_BatchResult]) -> Table:
     table.add_column("#", justify="right")
     table.add_column("Paper", overflow="fold")
     table.add_column("Status")
+    table.add_column("Part")
     table.add_column("LLM Time", justify="right")
     table.add_column("Total Time", justify="right")
     for name in RESOURCE_NAMES:
@@ -542,6 +551,7 @@ def _build_batch_results_table(results: list[_BatchResult]) -> Table:
             str(i),
             result.paper,
             label,
+            result.part or "n/a",
             _format_seconds(result.llm_seconds),
             _format_seconds(result.total_seconds),
             *resource_labels,
@@ -608,7 +618,8 @@ def main() -> None:
             console.print(f"[red]Error: {exc}[/red]")
             results.append(_BatchResult(paper=pdf, status="failed"))
 
-    console.print(_build_batch_results_table(results))
+    if len(pdfs) > 1:
+        console.print(_build_batch_results_table(results))
 
     failed = sum(result.status == "failed" for result in results)
     unverified = sum(result.status == "unverified" for result in results)

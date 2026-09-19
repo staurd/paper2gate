@@ -21,6 +21,7 @@ from src.main import (  # noqa: E402
     PipelineError,
     _batch_result_from_summary,
     _build_batch_results_table,
+    main as cli_main,
     run_pipeline,
 )
 from src.schemes import DILITHIUM, KYBER, resolve_scheme  # noqa: E402
@@ -223,11 +224,13 @@ def main() -> None:
             )
         summary = json.loads((output_dir / "run_summary.json").read_text(encoding="utf-8"))
         assert summary["resources"] == synth_stats
+        assert summary["synthesis_part"] == DEFAULT_PART
 
     populated = _batch_result_from_summary(
         "paper.pdf",
         {
             "status": "passed",
+            "synthesis_part": "xc7a200tffg1156-3",
             "timing": {"llm_seconds": 1.25, "pipeline_seconds": 2.5},
             "resources": {"LUT": 124, "FF": 18, "DSP": 2, "BRAM": 0},
         },
@@ -240,12 +243,53 @@ def main() -> None:
     assert "Outputs" not in rendered_table
     assert all(
         heading in rendered_table
-        for heading in ("LLM Time", "Total Time", "LUT", "FF", "DSP", "BRAM")
+        for heading in ("Part", "LLM Time", "Total Time", "LUT", "FF", "DSP", "BRAM")
     )
+    assert "xc7a200tffg1156-3" in rendered_table
     assert "1.250s" in rendered_table
     assert "2.500s" in rendered_table
     assert "124" in rendered_table
     assert rendered_table.count("n/a") >= 6
+
+    with tempfile.TemporaryDirectory() as cli_temp_dir:
+        output_dirs = []
+        for name, part in (("single", "xc7a35tcsg324-1"), ("batch", "xc7a200tffg1156-3")):
+            output_dir = Path(cli_temp_dir) / name
+            output_dir.mkdir()
+            (output_dir / "run_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "passed",
+                        "synthesis_part": part,
+                        "timing": {"llm_seconds": 1.0, "pipeline_seconds": 2.0},
+                        "resources": {"LUT": 1, "FF": 2, "DSP": 3, "BRAM": 4},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_dirs.append(output_dir)
+
+        with patch("src.main.expand_pdf_paths", return_value=["single.pdf"]), \
+             patch("src.main.os.path.exists", return_value=True), \
+             patch("src.main.run_pipeline", return_value=output_dirs[0]), \
+             patch("src.main._build_batch_results_table", wraps=_build_batch_results_table) as build_table, \
+             patch.object(sys, "argv", ["paper2gate", "single.pdf"]):
+            try:
+                cli_main()
+            except SystemExit as exc:
+                assert exc.code == 0
+        build_table.assert_not_called()
+
+        with patch("src.main.expand_pdf_paths", return_value=["first.pdf", "second.pdf"]), \
+             patch("src.main.os.path.exists", return_value=True), \
+             patch("src.main.run_pipeline", side_effect=output_dirs), \
+             patch("src.main._build_batch_results_table", wraps=_build_batch_results_table) as build_table, \
+             patch.object(sys, "argv", ["paper2gate", "first.pdf", "second.pdf"]):
+            try:
+                cli_main()
+            except SystemExit as exc:
+                assert exc.code == 0
+        build_table.assert_called_once()
     assert resolve_part("")[0] == DEFAULT_PART
     assert LLMClient._extract_json("prefix\n```json\n{\"ok\": true}\n```") == '{"ok": true}'
 

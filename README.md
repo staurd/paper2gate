@@ -20,6 +20,8 @@ The CLI also accepts a directory of PDFs. Useful options are:
 --output        output directory override
 ```
 
+When processing multiple PDFs, the final `Batch Results` table compares status, target Vivado part, timing, and resources. A single-PDF run keeps the per-run synthesis resource table without printing an aggregate batch table.
+
 The project always reads the repository-root `config.yaml`. Machine-specific values can be supplied through environment variables:
 
 ```text
