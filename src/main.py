@@ -65,6 +65,16 @@ def _empty_llm_timing() -> dict:
     }
 
 
+def _empty_llm_metadata() -> dict:
+    return {
+        "provider": None,
+        "model": None,
+        "extract_model": None,
+        "generate_model": None,
+        "by_operation": {},
+    }
+
+
 def _empty_resources() -> dict[str, int | float | None]:
     return {name: None for name in RESOURCE_NAMES}
 
@@ -90,6 +100,41 @@ def _normalize_resources(value: object) -> dict[str, int | float | None]:
     return resources
 
 
+def _normalize_llm_metadata(value: object) -> dict:
+    metadata = _empty_llm_metadata()
+    if not isinstance(value, dict):
+        return metadata
+
+    for name in ("provider", "model", "extract_model", "generate_model"):
+        metadata[name] = _optional_text(value.get(name))
+    metadata["extract_model"] = metadata["extract_model"] or metadata["model"]
+    metadata["generate_model"] = metadata["generate_model"] or metadata["model"]
+
+    by_operation = value.get("by_operation")
+    if isinstance(by_operation, dict):
+        normalized_operations = {}
+        for operation, details in by_operation.items():
+            if not isinstance(operation, str) or not isinstance(details, dict):
+                continue
+            normalized_operations[operation] = {
+                "provider": _optional_text(details.get("provider")),
+                "model": _optional_text(details.get("model")),
+            }
+        metadata["by_operation"] = normalized_operations
+    return metadata
+
+
+def _update_llm_metadata(summary: dict, client: LLMClient | None) -> None:
+    if client is None:
+        summary["llm"] = _empty_llm_metadata()
+        return
+    try:
+        client_metadata = client.metadata_snapshot()
+    except (AttributeError, TypeError, ValueError):
+        client_metadata = None
+    summary["llm"] = _normalize_llm_metadata(client_metadata)
+
+
 def _update_timing(summary: dict, pipeline_started: float, client: LLMClient | None) -> None:
     timing = _empty_llm_timing()
     if client is not None:
@@ -101,15 +146,50 @@ def _update_timing(summary: dict, pipeline_started: float, client: LLMClient | N
             timing.update(client_timing)
     timing["pipeline_seconds"] = round(time.perf_counter() - pipeline_started, 3)
     summary["timing"] = timing
+    _update_llm_metadata(summary, client)
+
+
+def _print_llm_metadata(client: LLMClient) -> None:
+    provider = _optional_text(getattr(client, "provider", None)) or "unknown"
+    model = _optional_text(getattr(client, "model", None))
+    extract_model = _optional_text(getattr(client, "extract_model", None)) or model
+    generate_model = _optional_text(getattr(client, "generate_model", None)) or model
+    console.print(f"  LLM provider: [cyan]{provider}[/cyan]")
+    if extract_model and extract_model == generate_model:
+        console.print(f"  LLM model: [cyan]{extract_model}[/cyan]")
+    else:
+        if extract_model:
+            console.print(f"  LLM extract model: [cyan]{extract_model}[/cyan]")
+        if generate_model:
+            console.print(f"  LLM generate model: [cyan]{generate_model}[/cyan]")
 
 
 def build_output_dir(pdf_path: str, base_dir: str = "outputs") -> Path:
     """Create a timestamped output directory for this run."""
     paper_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(pdf_path).stem).strip("_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = Path(base_dir) / f"{paper_name}_{timestamp}"
-    out.mkdir(parents=True, exist_ok=True)
+    base_path = Path(base_dir)
+    base_path.mkdir(parents=True, exist_ok=True)
+    out = base_path / f"{paper_name}_{timestamp}"
+    suffix = 1
+    while out.exists():
+        out = base_path / f"{paper_name}_{timestamp}_{suffix}"
+        suffix += 1
+    out.mkdir()
     return out
+
+
+def build_batch_output_dir(base_dir: Path) -> Path:
+    """Create a unique timestamped parent directory for a multi-paper run."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = base_dir / f"batch_{stamp}"
+    suffix = 1
+    while candidate.exists():
+        candidate = base_dir / f"batch_{stamp}_{suffix}"
+        suffix += 1
+    candidate.mkdir()
+    return candidate
 
 
 def resolve_synth_part(cli_part: str | None, extracted_device: str) -> str:
@@ -156,10 +236,14 @@ def _set_stage(summary: dict, name: str, status: str, detail: str = "") -> None:
     summary["stages"][name] = entry
 
 
+def _write_json(path: Path, value: dict) -> Path:
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def _write_summary(output_dir: Path, summary: dict) -> Path:
     path = output_dir / "run_summary.json"
-    path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    return path
+    return _write_json(path, summary)
 
 
 def _resolve_output_base(output_base: str | None) -> Path:
@@ -203,6 +287,7 @@ def run_pipeline(
         "paper": str(Path(pdf_path).resolve()),
         "status": "running",
         "scheme": None,
+        "llm": _empty_llm_metadata(),
         "timing": {"pipeline_seconds": 0.0, **_empty_llm_timing()},
         "resources": _empty_resources(),
         "tools": {
@@ -234,6 +319,7 @@ def run_pipeline(
             )
 
         client = LLMClient()
+        _print_llm_metadata(client)
         if scheme in (None, "auto"):
             try:
                 with console.status("Classifying target scheme with LLM..."):
@@ -478,6 +564,11 @@ def run_pipeline(
         if output_dir is not None:
             _update_timing(summary, pipeline_started, client)
             _write_summary(output_dir, summary)
+            # Let the batch caller retain a failed paper's output directory.
+            try:
+                setattr(exc, "output_dir", output_dir)
+            except AttributeError:
+                pass
         raise
 
 
@@ -503,23 +594,41 @@ class _BatchResult:
     part: str | None = None
     llm_seconds: int | float | None = None
     total_seconds: int | float | None = None
+    llm_calls: int | None = None
+    llm: dict = field(default_factory=_empty_llm_metadata)
     resources: dict[str, int | float | None] = field(default_factory=_empty_resources)
+    output_dir: Path | None = None
+    error: str | None = None
 
 
-def _batch_result_from_summary(pdf: str, summary: dict) -> _BatchResult:
+def _batch_result_from_summary(
+    pdf: str,
+    summary: dict,
+    output_dir: Path | None = None,
+) -> _BatchResult:
     timing = summary.get("timing")
     if not isinstance(timing, dict):
         timing = {}
     status = summary.get("status", "passed")
     if not isinstance(status, str):
         status = "passed"
+    paper = summary.get("paper")
+    if not isinstance(paper, str) or not paper.strip():
+        paper = str(Path(pdf).resolve())
+    llm_calls = timing.get("llm_calls")
+    if not isinstance(llm_calls, int) or isinstance(llm_calls, bool):
+        llm_calls = None
     return _BatchResult(
-        paper=pdf,
+        paper=paper,
         status=status,
         part=_optional_text(summary.get("synthesis_part")),
         llm_seconds=_optional_number(timing.get("llm_seconds")),
         total_seconds=_optional_number(timing.get("pipeline_seconds")),
+        llm_calls=llm_calls,
+        llm=_normalize_llm_metadata(summary.get("llm")),
         resources=_normalize_resources(summary.get("resources")),
+        output_dir=output_dir,
+        error=_optional_text(summary.get("error")),
     )
 
 
@@ -542,6 +651,7 @@ def _build_batch_results_table(results: list[_BatchResult]) -> Table:
         label = {
             "passed": "[green]PASSED[/green]",
             "unverified": "[yellow]UNVERIFIED[/yellow]",
+            "unavailable": "[yellow]UNAVAILABLE[/yellow]",
             "failed": "[red]FAILED[/red]",
         }.get(result.status, result.status.upper())
         resource_labels = [
@@ -560,6 +670,85 @@ def _build_batch_results_table(results: list[_BatchResult]) -> Table:
             *resource_labels,
         )
     return table
+
+
+def _sum_batch_metric(results: list[_BatchResult], name: str) -> int | float:
+    return round(
+        sum(
+            value
+            for result in results
+            if (value := getattr(result, name)) is not None
+        ),
+        3,
+    )
+
+
+def _batch_result_to_dict(result: _BatchResult, batch_dir: Path) -> dict:
+    item = {
+        "paper": result.paper,
+        "status": result.status,
+        "output_dir": None,
+        "run_summary": None,
+        "synthesis_part": result.part,
+        "timing": {
+            "llm_seconds": result.llm_seconds,
+            "pipeline_seconds": result.total_seconds,
+            "llm_calls": result.llm_calls,
+        },
+        "llm": result.llm,
+        "resources": result.resources,
+    }
+    if result.output_dir is not None:
+        item["output_dir"] = Path(
+            os.path.relpath(result.output_dir, batch_dir)
+        ).as_posix()
+        item["run_summary"] = Path(
+            os.path.relpath(result.output_dir / "run_summary.json", batch_dir)
+        ).as_posix()
+    if result.error:
+        item["error"] = result.error
+    return item
+
+
+def _write_batch_summary(
+    batch_dir: Path,
+    started_at: str,
+    finished_at: str,
+    wall_seconds: float,
+    results: list[_BatchResult],
+) -> Path:
+    status_counts = {"passed": 0, "unverified": 0, "failed": 0}
+    for result in results:
+        if result.status == "failed":
+            status_counts["failed"] += 1
+        elif result.status in ("unverified", "unavailable"):
+            status_counts["unverified"] += 1
+        else:
+            status_counts["passed"] += 1
+
+    if status_counts["failed"]:
+        status = "failed"
+    elif status_counts["unverified"]:
+        status = "unverified"
+    else:
+        status = "passed"
+
+    summary = {
+        "batch_id": batch_dir.name,
+        "status": status,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "wall_seconds": round(wall_seconds, 3),
+        "paper_count": len(results),
+        "status_counts": status_counts,
+        "totals": {
+            "pipeline_seconds": _sum_batch_metric(results, "total_seconds"),
+            "llm_seconds": _sum_batch_metric(results, "llm_seconds"),
+            "llm_calls": int(_sum_batch_metric(results, "llm_calls")),
+        },
+        "papers": [_batch_result_to_dict(result, batch_dir) for result in results],
+    }
+    return _write_json(batch_dir / "batch_summary.json", summary)
 
 
 def main() -> None:
@@ -598,13 +787,23 @@ def main() -> None:
         console.print("[red]Error: PDF not found:[/red] " + ", ".join(missing))
         sys.exit(1)
 
+    batch_dir: Path | None = None
+    batch_started_at = ""
+    batch_started = 0.0
+    if len(pdfs) > 1:
+        output_root = _resolve_output_base(args.output)
+        batch_dir = build_batch_output_dir(output_root)
+        batch_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        batch_started = time.perf_counter()
+        console.print(f"  Batch outputs: [cyan]{batch_dir}[/cyan]")
+
     results: list[_BatchResult] = []
     for i, pdf in enumerate(pdfs, 1):
         console.print(Panel.fit(f"[bold]Paper {i}/{len(pdfs)}: {pdf}[/bold]", style="cyan"))
         try:
             output_dir = run_pipeline(
                 pdf_path=pdf,
-                output_base=args.output,
+                output_base=str(batch_dir) if batch_dir is not None else args.output,
                 dry_run=args.dry_run,
                 use_review=not args.no_review,
                 use_verify=not args.no_verify,
@@ -613,19 +812,46 @@ def main() -> None:
                 part=args.part,
             )
             summary = json.loads((output_dir / "run_summary.json").read_text(encoding="utf-8"))
-            results.append(_batch_result_from_summary(pdf, summary))
+            results.append(_batch_result_from_summary(pdf, summary, output_dir))
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted by user[/yellow]")
             sys.exit(130)
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-            results.append(_BatchResult(paper=pdf, status="failed"))
+            failed_output_dir = getattr(exc, "output_dir", None)
+            if not isinstance(failed_output_dir, Path):
+                failed_output_dir = None
+            failed_summary = {}
+            if failed_output_dir is not None:
+                summary_path = failed_output_dir / "run_summary.json"
+                if summary_path.exists():
+                    try:
+                        failed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        failed_summary = {}
+            results.append(
+                _batch_result_from_summary(
+                    pdf,
+                    failed_summary or {"status": "failed", "error": str(exc)},
+                    failed_output_dir,
+                )
+            )
 
     if len(pdfs) > 1:
         console.print(_build_batch_results_table(results))
+        assert batch_dir is not None
+        finished_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        batch_summary_path = _write_batch_summary(
+            batch_dir,
+            batch_started_at,
+            finished_at,
+            time.perf_counter() - batch_started,
+            results,
+        )
+        console.print(f"  Batch summary: [cyan]{batch_summary_path}[/cyan]")
 
     failed = sum(result.status == "failed" for result in results)
-    unverified = sum(result.status == "unverified" for result in results)
+    unverified = sum(result.status in ("unverified", "unavailable") for result in results)
     passed = len(results) - failed - unverified
     console.print(
         f"[bold green]{passed} passed[/bold green], "

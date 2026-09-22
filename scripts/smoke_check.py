@@ -23,6 +23,9 @@ from src.main import (  # noqa: E402
     PipelineError,
     _batch_result_from_summary,
     _build_batch_results_table,
+    _print_llm_metadata,
+    _write_batch_summary,
+    build_batch_output_dir,
     main as cli_main,
     run_pipeline,
 )
@@ -191,6 +194,55 @@ def main() -> None:
         {"role": "system", "content": "system"},
         {"role": "user", "content": "user"},
     ]
+    relay_metadata = relay_client.metadata_snapshot()
+    assert relay_metadata["provider"] == "openai"
+    assert relay_metadata["model"] == "relay-model"
+    assert relay_metadata["by_operation"]["classify_scheme"] == {
+        "provider": "openai",
+        "model": "relay-model",
+    }
+    assert relay_metadata["by_operation"]["generate_modmul"] == {
+        "provider": "openai",
+        "model": "relay-model",
+    }
+
+    with patch(
+        "src.llm_client.get_llm_config",
+        return_value={
+            "provider": "deepseek",
+            "model": "deepseek-default",
+            "extract_model": "deepseek-reasoner",
+            "generate_model": "deepseek-chat",
+            "api_key": "deepseek-key",
+        },
+    ):
+        staged_client = LLMClient()
+    staged_metadata = staged_client.metadata_snapshot()
+    assert staged_metadata["provider"] == "deepseek"
+    assert staged_metadata["extract_model"] == "deepseek-reasoner"
+    assert staged_metadata["generate_model"] == "deepseek-chat"
+    assert staged_metadata["by_operation"]["extract_innovations"] == {
+        "provider": "deepseek",
+        "model": "deepseek-reasoner",
+    }
+    assert staged_metadata["by_operation"]["fix_function"] == {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+    }
+
+    with patch("src.main.console.print") as print_console:
+        _print_llm_metadata(relay_client)
+    printed = "\n".join(str(call.args[0]) for call in print_console.call_args_list)
+    assert "LLM provider: [cyan]openai[/cyan]" in printed
+    assert "LLM model: [cyan]relay-model[/cyan]" in printed
+    assert "LLM extract model" not in printed
+
+    with patch("src.main.console.print") as print_console:
+        _print_llm_metadata(staged_client)
+    printed = "\n".join(str(call.args[0]) for call in print_console.call_args_list)
+    assert "LLM provider: [cyan]deepseek[/cyan]" in printed
+    assert "LLM extract model: [cyan]deepseek-reasoner[/cyan]" in printed
+    assert "LLM generate model: [cyan]deepseek-chat[/cyan]" in printed
 
     FakeOpenAI.instances = []
     FakeOpenAI.legacy_token_parameter = False
@@ -281,8 +333,21 @@ def main() -> None:
             evidence = f"implements {name} reduction"
             with patch("src.main.extract_text", return_value=raw_text), \
                  patch("src.main.LLMClient") as client_class, \
-                 patch("src.main.extract_innovations", return_value=PaperAnalysis(paper_title="test", innovations=[])) as extract:
+             patch("src.main.extract_innovations", return_value=PaperAnalysis(paper_title="test", innovations=[])) as extract:
                 client_class.return_value.generate_structured.return_value = json.dumps({"scheme": name, "evidence": evidence})
+                client_class.return_value.provider = "openai"
+                client_class.return_value.model = "test-model"
+                client_class.return_value.extract_model = "test-model"
+                client_class.return_value.generate_model = "test-model"
+                client_class.return_value.metadata_snapshot.return_value = {
+                    "provider": "openai",
+                    "model": "test-model",
+                    "extract_model": "test-model",
+                    "generate_model": "test-model",
+                    "by_operation": {
+                        "classify_scheme": {"provider": "openai", "model": "test-model"}
+                    },
+                }
                 output_dir = run_pipeline(f"{name}.pdf", output_base=temp_dir, dry_run=True)
             prompt = client_class.return_value.generate_structured.call_args.kwargs["user_prompt"]
             assert client_class.return_value.generate_structured.call_args.kwargs["stage"] == "extract"
@@ -299,6 +364,12 @@ def main() -> None:
             assert summary["stages"]["classify_scheme"]["status"] == "passed"
             assert "timing" in summary
             assert "llm_seconds" in summary["timing"]
+            assert summary["llm"]["provider"] == "openai"
+            assert summary["llm"]["model"] == "test-model"
+            assert summary["llm"]["by_operation"]["classify_scheme"] == {
+                "provider": "openai",
+                "model": "test-model",
+            }
 
         for label, response in (
             ("unknown", '{"scheme":"unknown","evidence":"not stated"}'),
@@ -400,6 +471,77 @@ def main() -> None:
     assert rendered_table.count("n/a") >= 6
 
     with tempfile.TemporaryDirectory() as cli_temp_dir:
+        batch_root = build_batch_output_dir(Path(cli_temp_dir))
+        second_batch_root = build_batch_output_dir(Path(cli_temp_dir))
+        assert second_batch_root.name != batch_root.name
+        first_output = batch_root / "paper_a_20260922_100000"
+        second_output = batch_root / "paper_b_20260922_100100"
+        failed_output = batch_root / "paper_c_20260922_100200"
+        first_output.mkdir()
+        second_output.mkdir()
+        failed_output.mkdir()
+        first_result = _batch_result_from_summary(
+            "paper_a.pdf",
+            {
+                "paper": str(Path("paper_a.pdf").resolve()),
+                "status": "passed",
+                "synthesis_part": "xc7a35tcsg324-1",
+                "timing": {"llm_seconds": 1.5, "pipeline_seconds": 3.0, "llm_calls": 2},
+                "llm": {
+                    "provider": "openai",
+                    "model": "gpt-5.6-terra",
+                    "extract_model": "gpt-5.6-terra",
+                    "generate_model": "gpt-5.6-terra",
+                    "by_operation": {},
+                },
+                "resources": {"LUT": 1, "FF": 2, "DSP": 3, "BRAM": 4},
+            },
+            first_output,
+        )
+        second_result = _batch_result_from_summary(
+            "paper_b.pdf",
+            {
+                "paper": str(Path("paper_b.pdf").resolve()),
+                "status": "unverified",
+                "timing": {"llm_seconds": 2.5, "pipeline_seconds": 4.0, "llm_calls": 3},
+                "resources": {"LUT": None, "FF": None, "DSP": None, "BRAM": None},
+            },
+            second_output,
+        )
+        failed_result = _batch_result_from_summary(
+            "paper_c.pdf",
+            {
+                "paper": str(Path("paper_c.pdf").resolve()),
+                "status": "failed",
+                "error": "functional verification failed",
+                "timing": {"llm_seconds": 0.5, "pipeline_seconds": 1.0, "llm_calls": 1},
+                "resources": {"LUT": None, "FF": None, "DSP": None, "BRAM": None},
+            },
+            failed_output,
+        )
+        batch_summary_path = _write_batch_summary(
+            batch_root,
+            "2026-09-22T10:00:00+08:00",
+            "2026-09-22T10:00:10+08:00",
+            10.0,
+            [first_result, second_result, failed_result],
+        )
+        batch_summary = json.loads(batch_summary_path.read_text(encoding="utf-8"))
+        assert batch_summary["batch_id"] == batch_root.name
+        assert batch_summary["status"] == "failed"
+        assert batch_summary["paper_count"] == 3
+        assert batch_summary["status_counts"] == {"passed": 1, "unverified": 1, "failed": 1}
+        assert batch_summary["totals"] == {
+            "pipeline_seconds": 8.0,
+            "llm_seconds": 4.5,
+            "llm_calls": 6,
+        }
+        assert batch_summary["papers"][0]["output_dir"] == first_output.name
+        assert batch_summary["papers"][0]["run_summary"] == f"{first_output.name}/run_summary.json"
+        assert batch_summary["papers"][0]["llm"]["provider"] == "openai"
+        assert batch_summary["papers"][0]["llm"]["model"] == "gpt-5.6-terra"
+        assert batch_summary["papers"][2]["error"] == "functional verification failed"
+
         output_dirs = []
         for name, part in (("single", "xc7a35tcsg324-1"), ("batch", "xc7a200tffg1156-3")):
             output_dir = Path(cli_temp_dir) / name
@@ -427,17 +569,65 @@ def main() -> None:
             except SystemExit as exc:
                 assert exc.code == 0
         build_table.assert_not_called()
+        assert list(Path(cli_temp_dir).glob("batch_*/batch_summary.json")) == [batch_summary_path]
 
         with patch("src.main.expand_pdf_paths", return_value=["first.pdf", "second.pdf"]), \
              patch("src.main.os.path.exists", return_value=True), \
              patch("src.main.run_pipeline", side_effect=output_dirs), \
              patch("src.main._build_batch_results_table", wraps=_build_batch_results_table) as build_table, \
-             patch.object(sys, "argv", ["paper2gate", "first.pdf", "second.pdf"]):
+             patch.object(
+                 sys,
+                 "argv",
+                 ["paper2gate", "first.pdf", "second.pdf", "--output", cli_temp_dir],
+             ):
             try:
                 cli_main()
             except SystemExit as exc:
                 assert exc.code == 0
         build_table.assert_called_once()
+        generated_batches = sorted(Path(cli_temp_dir).glob("batch_*/batch_summary.json"))
+        assert generated_batches
+        generated_batch = json.loads(generated_batches[-1].read_text(encoding="utf-8"))
+        assert generated_batch["paper_count"] == 2
+        assert generated_batch["status"] == "passed"
+
+        def failed_pipeline(**kwargs):
+            failed_dir = Path(kwargs["output_base"]) / f"{Path(kwargs['pdf_path']).stem}_20260922_100300"
+            failed_dir.mkdir(parents=True)
+            (failed_dir / "run_summary.json").write_text(
+                json.dumps(
+                    {
+                        "paper": str(Path(kwargs["pdf_path"]).resolve()),
+                        "status": "failed",
+                        "error": "mock generation failure",
+                        "timing": {"llm_seconds": 1.0, "pipeline_seconds": 2.0, "llm_calls": 1},
+                        "resources": {"LUT": None, "FF": None, "DSP": None, "BRAM": None},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            error = PipelineError("mock generation failure")
+            error.output_dir = failed_dir
+            raise error
+
+        with patch("src.main.expand_pdf_paths", return_value=["failed.pdf", "failed2.pdf"]), \
+             patch("src.main.os.path.exists", return_value=True), \
+             patch("src.main.run_pipeline", side_effect=failed_pipeline), \
+             patch.object(
+                 sys,
+                 "argv",
+                 ["paper2gate", "failed.pdf", "failed2.pdf", "--output", cli_temp_dir],
+             ):
+            try:
+                cli_main()
+            except SystemExit as exc:
+                assert exc.code == 1
+        failed_batches = sorted(Path(cli_temp_dir).glob("batch_*/batch_summary.json"))
+        failed_summary = json.loads(failed_batches[-1].read_text(encoding="utf-8"))
+        assert failed_summary["status"] == "failed"
+        assert failed_summary["status_counts"]["failed"] == 2
+        assert failed_summary["papers"][0]["output_dir"] == "failed_20260922_100300"
+        assert failed_summary["papers"][0]["error"] == "mock generation failure"
     assert resolve_part("")[0] == DEFAULT_PART
     assert LLMClient._extract_json("prefix\n```json\n{\"ok\": true}\n```") == '{"ok": true}'
 

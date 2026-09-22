@@ -20,7 +20,13 @@ The CLI also accepts a directory of PDFs. Useful options are:
 --output        output directory override
 ```
 
-When processing multiple PDFs, the final `Batch Results` table compares status, target Vivado part, timing, and resources. A single-PDF run keeps the per-run synthesis resource table without printing an aggregate batch table.
+When processing multiple PDFs, Paper2Gate creates one `outputs/batch_<timestamp>/`
+directory. Each paper gets its own child output directory, and the batch root
+contains `batch_summary.json` with per-paper status, timing, LLM call counts,
+resource results, LLM provider/model metadata, and batch totals. The batch total
+sums processing time and LLM calls; FPGA resources remain per-paper because
+summing resources from separate designs would be misleading. A single-PDF run
+keeps the existing per-run output path and does not create a batch directory.
 
 The project always reads the repository-root `config.yaml`. Machine-specific values can be supplied through environment variables:
 
@@ -70,7 +76,17 @@ request with the older `max_tokens` parameter.
 
 Every run extracts exactly one modular-arithmetic innovation and generates the fixed-interface `modmul` module. Vivado, when enabled, synthesizes that generated module as the top-level design.
 
-Each run writes `run_summary.json` with stage status, timing, and FPGA resources. The `timing` object reports total pipeline time, total LLM time/calls, and LLM time by operation (`classify_scheme`, `extract_innovations`, `generate_modmul`, `fix_syntax`, and `fix_function`). The top-level `resources` object reports `LUT`, `FF`, `DSP`, and `BRAM`; values are `null` when synthesis is skipped or unavailable. `passed`, `failed`, `skipped`, `unverified`, and `unavailable` are kept distinct. Vivado is optional for generation and simulation, but resource results are unavailable without it.
+Each run writes `run_summary.json` with stage status, timing, LLM metadata, and
+FPGA resources. The console prints the selected provider and model immediately
+after the LLM client is initialized. The `llm` object records the provider,
+default model, extraction/generation models, and `by_operation` mappings for
+`classify_scheme`, `extract_innovations`, `generate_modmul`, `fix_syntax`, and
+`fix_function`. The `timing` object reports total pipeline time, total LLM
+time/calls, and LLM time by operation. The top-level `resources` object reports
+`LUT`, `FF`, `DSP`, and `BRAM`; values are `null` when synthesis is skipped or
+unavailable. `passed`, `failed`, `skipped`, `unverified`, and `unavailable` are
+kept distinct. Vivado is optional for generation and simulation, but resource
+results are unavailable without it.
 
 ## Offline smoke check
 

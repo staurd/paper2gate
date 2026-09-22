@@ -15,6 +15,7 @@ class LLMClient:
         "fix_syntax",
         "fix_function",
     )
+    EXTRACT_OPERATIONS = frozenset({"classify_scheme", "extract_innovations"})
 
     def __init__(self):
         llm_cfg = get_llm_config()
@@ -64,6 +65,27 @@ class LLMClient:
             "llm_seconds": round(sum(v["seconds"] for v in self._timings.values()), 3),
             "llm_calls": sum(v["calls"] for v in self._timings.values()),
             "llm_by_operation": by_operation,
+        }
+
+    def metadata_snapshot(self) -> dict:
+        """Return the provider and effective model for each pipeline operation."""
+        by_operation = {}
+        for operation in self.TIMING_OPERATIONS:
+            model = (
+                self.extract_model
+                if operation in self.EXTRACT_OPERATIONS
+                else self.generate_model
+            )
+            by_operation[operation] = {
+                "provider": self.provider,
+                "model": model,
+            }
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "extract_model": self.extract_model,
+            "generate_model": self.generate_model,
+            "by_operation": by_operation,
         }
 
     def _record_timing(self, operation: str, calls: int, seconds: float) -> None:
