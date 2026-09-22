@@ -40,6 +40,12 @@ PAPER2GATE_VIVADO_BINARY
 
 Empty tool paths in `config.yaml` mean that the executable is searched on `PATH`.
 
+Vivado synthesis runs from a short temporary working directory so its internal
+`.Xil` files do not inherit long batch-paper paths; reports are still written
+under each paper's `synthesis/modmul/` directory. On hosted shells that omit
+Windows architecture environment variables, the runner automatically selects
+the installed 64-bit Vivado runtime when it is available.
+
 ## LLM provider configuration
 
 Both providers are preconfigured under `llm.providers`; change only
@@ -60,6 +66,14 @@ llm:
       model: gpt-4o
       api_key: ${OPENAI_API_KEY}
       base_url: https://zyrus.aitoken.credit/v1
+  vision:
+    enabled: false
+    provider: openai
+    model: gpt-4o
+    api_key: ${OPENAI_API_KEY}
+    base_url: https://zyrus.aitoken.credit/v1
+    max_tokens: 4096
+    temperature: 0.1
 ```
 
 The selected provider's model, API key, and endpoint are merged automatically
@@ -70,9 +84,28 @@ corresponding environment variable (or `.env`); do not commit keys to the
 repository. If a relay rejects `max_completion_tokens`, the client retries that
 request with the older `max_tokens` parameter.
 
+Set `llm.vision.enabled` to `true` to enable figure analysis. The text model
+first classifies figure captions, then the configured vision model receives
+only pages containing captions relevant to modular multiplication or modular
+reduction. Vision failures fall back to text-only extraction and mark the run
+as `unverified`. The selected pages and evidence are saved as
+`figure_candidates.json`, `vision_evidence.json`, and PNG files under `figures/`.
+During a vision-enabled run, the console prints caption count, selected figure
+IDs with their physical PDF pages, and each page's render/analysis progress.
+The vision provider must expose an OpenAI-compatible image-message API; verify
+that the configured model actually supports image input.
+
 ## Pipeline
 
-`extracted_text/full_text.txt` keeps the original PDF text. In auto mode, an LLM classifies the target scheme from the first 2,000 characters after the trailing references section is trimmed. Ambiguous classifications stop that paper; use `--scheme` to select a profile explicitly. Innovation extraction then uses the selected profile and the trimmed paper text.
+`extracted_text/full_text.txt` keeps the original PDF text, and
+`extracted_text/pages/page_XXXX.txt` keeps the same text split by physical PDF
+page (page numbers are 1-based). When vision is enabled, figure candidates and
+vision evidence record this physical page as `pdf_page`; the console reports
+the same mapping before rendering each page. In auto mode, an LLM classifies
+the target scheme from the first 2,000 characters after the trailing
+references section is trimmed. Ambiguous classifications stop that paper; use
+`--scheme` to select a profile explicitly. Innovation extraction then uses the
+selected profile and the trimmed paper text.
 
 Every run extracts exactly one modular-arithmetic innovation and generates the fixed-interface `modmul` module. Vivado, when enabled, synthesizes that generated module as the top-level design.
 
@@ -80,9 +113,11 @@ Each run writes `run_summary.json` with stage status, timing, LLM metadata, and
 FPGA resources. The console prints the selected provider and model immediately
 after the LLM client is initialized. The `llm` object records the provider,
 default model, extraction/generation models, and `by_operation` mappings for
-`classify_scheme`, `extract_innovations`, `generate_modmul`, `fix_syntax`, and
-`fix_function`. The `timing` object reports total pipeline time, total LLM
-time/calls, and LLM time by operation. The top-level `resources` object reports
+`classify_scheme`, `extract_innovations`, `classify_figures`,
+`analyze_figure_page`, `generate_modmul`, `fix_syntax`, and `fix_function`.
+The `llm.vision` object records the independent vision provider and model. The
+`timing` object reports total pipeline time, total LLM time/calls, and LLM time
+by operation. The top-level `resources` object reports
 `LUT`, `FF`, `DSP`, and `BRAM`; values are `null` when synthesis is skipped or
 unavailable. `passed`, `failed`, `skipped`, `unverified`, and `unavailable` are
 kept distinct. Vivado is optional for generation and simulation, but resource

@@ -80,7 +80,7 @@ No concrete FPGA part was supplied. Use portable synthesizable Verilog-2001.
 
 1. Output the COMPLETE module from `module modmul(` to `endmodule`, including the fixed skeleton
 2. The fixed parts (DSP multiplier P_DSP, product register P_R) MUST be included verbatim as shown above
-3. Your reduction logic MUST produce the paper's reduced output for all valid {{pw}}-bit inputs (P_R ≤ {{q_minus_1}}×{{q_minus_1}} = {{q_minus_1_sq}}). If `correction_factor` is 1, this is P_R mod {{q}}; otherwise it is `correction_factor * P_R mod {{q}}`.
+3. Your reduction logic MUST produce the paper's reduced output for all valid {{pw}}-bit inputs (P_R ≤ {{q_minus_1}}×{{q_minus_1}} = {{q_minus_1_sq}}). If `correction_factor` is 1, this is P_R mod {{q}}; otherwise it is the signed expression `correction_factor * P_R mod {{q}}`. A negative value such as `-13` MUST remain negative in the arithmetic semantics; do not silently change it to `13`.
 4. The output R must be in range [0, {{q_minus_1}}]
 5. **Synthesizable RTL** — no initial, forever, $finish, or testbench constructs
 6. **Self-contained** — do NOT instantiate external sub-modules for the reduction. Write the reduction logic inline.

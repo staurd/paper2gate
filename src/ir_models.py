@@ -16,8 +16,8 @@ class HardwareSpec(BaseModel):
     behavior: str = ""
     timing: str = ""
     constraints: str = ""
-    # Constant factor the module's output is off by, relative to a true a*b mod q.
-    # K-reduction computes k*a*b mod q (k=13 for Kyber); plain reduction => 1.
+    # Signed constant factor relative to a true a*b mod q. For example,
+    # ``-13`` means the module computes (-13*a*b) mod q.
     correction_factor: int = 1
     # Total clock cycles from valid A/B at the inputs to valid R at the output,
     # counting EVERY register stage including the product register.

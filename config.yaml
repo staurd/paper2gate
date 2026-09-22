@@ -19,6 +19,15 @@ llm:
       model: gpt-5.6-terra
       api_key: ${OPENAI_API_KEY}
       base_url: https://zyrus.aitoken.credit/v1
+  vision:
+    # Disabled by default because page images add latency and token cost.
+    enabled: true
+    provider: openai
+    model: gpt-5.6-terra
+    api_key: ${OPENAI_API_KEY}
+    base_url: https://zyrus.aitoken.credit/v1
+    max_tokens: 4096
+    temperature: 0.1
 
 output:
   base_dir: outputs

@@ -22,12 +22,19 @@ from src.code_generator import (
     save_error_logs,
     save_verilog,
 )
-from src.config import PROJECT_ROOT, get_iverilog_config, get_output_config, get_vivado_config
+from src.config import (
+    PROJECT_ROOT,
+    get_iverilog_config,
+    get_output_config,
+    get_vivado_config,
+    get_vision_config,
+)
 from src.console import console
+from src.figure_analysis import analyze_figure_pages, classify_figure_captions
 from src.innovation_extractor import classify_scheme, extract_innovations, save_specs, trim_references
 from src.ir_models import ModuleSpec, parse_module_params
 from src.llm_client import LLMClient
-from src.pdf_parser import extract_text
+from src.pdf_parser import extract_figure_captions, extract_page_texts, extract_text
 from src.schemes import resolve_scheme
 from src.verification_runner import verify_module
 from src.verilog_utils import validate_modmul_interface
@@ -46,6 +53,8 @@ class PipelineError(RuntimeError):
 LLM_TIMING_OPERATIONS = (
     "classify_scheme",
     "extract_innovations",
+    "classify_figures",
+    "analyze_figure_page",
     "generate_modmul",
     "fix_syntax",
     "fix_function",
@@ -72,6 +81,11 @@ def _empty_llm_metadata() -> dict:
         "extract_model": None,
         "generate_model": None,
         "by_operation": {},
+        "vision": {
+            "enabled": False,
+            "provider": None,
+            "model": None,
+        },
     }
 
 
@@ -109,6 +123,13 @@ def _normalize_llm_metadata(value: object) -> dict:
         metadata[name] = _optional_text(value.get(name))
     metadata["extract_model"] = metadata["extract_model"] or metadata["model"]
     metadata["generate_model"] = metadata["generate_model"] or metadata["model"]
+    vision = value.get("vision")
+    if isinstance(vision, dict):
+        metadata["vision"] = {
+            "enabled": bool(vision.get("enabled", False)),
+            "provider": _optional_text(vision.get("provider")),
+            "model": _optional_text(vision.get("model")),
+        }
 
     by_operation = value.get("by_operation")
     if isinstance(by_operation, dict):
@@ -124,29 +145,83 @@ def _normalize_llm_metadata(value: object) -> dict:
     return metadata
 
 
-def _update_llm_metadata(summary: dict, client: LLMClient | None) -> None:
-    if client is None:
-        summary["llm"] = _empty_llm_metadata()
-        return
+def _update_llm_metadata(
+    summary: dict,
+    client: LLMClient | None,
+    vision_client: LLMClient | None = None,
+    vision_config: dict | None = None,
+) -> None:
+    metadata = _empty_llm_metadata()
     try:
-        client_metadata = client.metadata_snapshot()
+        client_metadata = client.metadata_snapshot() if client is not None else None
     except (AttributeError, TypeError, ValueError):
         client_metadata = None
-    summary["llm"] = _normalize_llm_metadata(client_metadata)
-
-
-def _update_timing(summary: dict, pipeline_started: float, client: LLMClient | None) -> None:
-    timing = _empty_llm_timing()
-    if client is not None:
+    metadata.update(_normalize_llm_metadata(client_metadata))
+    if vision_config is not None:
+        metadata["vision"] = {
+            "enabled": bool(vision_config.get("enabled", False)),
+            "provider": _optional_text(vision_config.get("provider")),
+            "model": _optional_text(vision_config.get("model")),
+        }
+    if vision_client is not None:
         try:
-            client_timing = client.timing_snapshot()
+            vision_metadata = vision_client.metadata_snapshot()
+        except (AttributeError, TypeError, ValueError):
+            vision_metadata = None
+        if isinstance(vision_metadata, dict):
+            vision_provider = _optional_text(vision_metadata.get("provider"))
+            vision_model = _optional_text(vision_metadata.get("model"))
+            metadata["vision"] = {
+                "enabled": True,
+                "provider": vision_provider,
+                "model": vision_model,
+            }
+            by_operation = metadata.setdefault("by_operation", {})
+            by_operation["analyze_figure_page"] = {
+                "provider": vision_provider,
+                "model": vision_model,
+            }
+    else:
+        metadata.setdefault("by_operation", {}).pop("analyze_figure_page", None)
+    summary["llm"] = _normalize_llm_metadata(metadata)
+
+
+def _update_timing(
+    summary: dict,
+    pipeline_started: float,
+    client: LLMClient | None,
+    vision_client: LLMClient | None = None,
+    vision_config: dict | None = None,
+) -> None:
+    timing = _empty_llm_timing()
+    snapshots = []
+    for timing_client in (client, vision_client):
+        if timing_client is None:
+            continue
+        try:
+            client_timing = timing_client.timing_snapshot()
         except (AttributeError, TypeError, ValueError):
             client_timing = None
         if isinstance(client_timing, dict):
-            timing.update(client_timing)
+            snapshots.append(client_timing)
+    for client_timing in snapshots:
+        timing["llm_seconds"] = round(
+            timing["llm_seconds"] + float(client_timing.get("llm_seconds", 0.0)), 3
+        )
+        timing["llm_calls"] += int(client_timing.get("llm_calls", 0))
+        for operation, values in client_timing.get("llm_by_operation", {}).items():
+            if not isinstance(values, dict):
+                continue
+            target = timing["llm_by_operation"].setdefault(
+                operation, {"calls": 0, "seconds": 0.0}
+            )
+            target["calls"] += int(values.get("calls", 0))
+            target["seconds"] = round(
+                target["seconds"] + float(values.get("seconds", 0.0)), 3
+            )
     timing["pipeline_seconds"] = round(time.perf_counter() - pipeline_started, 3)
     summary["timing"] = timing
-    _update_llm_metadata(summary, client)
+    _update_llm_metadata(summary, client, vision_client, vision_config)
 
 
 def _print_llm_metadata(client: LLMClient) -> None:
@@ -162,6 +237,17 @@ def _print_llm_metadata(client: LLMClient) -> None:
             console.print(f"  LLM extract model: [cyan]{extract_model}[/cyan]")
         if generate_model:
             console.print(f"  LLM generate model: [cyan]{generate_model}[/cyan]")
+
+
+def _print_vision_metadata(config: dict) -> None:
+    if not config.get("enabled", False):
+        console.print("  Vision analysis: [dim]disabled[/dim]")
+        return
+    provider = _optional_text(config.get("provider")) or "unknown"
+    model = _optional_text(config.get("model")) or "unknown"
+    console.print("  Vision analysis: [cyan]enabled[/cyan]")
+    console.print(f"  Vision provider: [cyan]{provider}[/cyan]")
+    console.print(f"  Vision model: [cyan]{model}[/cyan]")
 
 
 def build_output_dir(pdf_path: str, base_dir: str = "outputs") -> Path:
@@ -236,7 +322,7 @@ def _set_stage(summary: dict, name: str, status: str, detail: str = "") -> None:
     summary["stages"][name] = entry
 
 
-def _write_json(path: Path, value: dict) -> Path:
+def _write_json(path: Path, value: object) -> Path:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
 
@@ -282,6 +368,8 @@ def run_pipeline(
     """Run the paper-to-Verilog pipeline and write a machine-readable summary."""
     output_dir: Path | None = None
     client: LLMClient | None = None
+    vision_client: LLMClient | None = None
+    vision_config = get_vision_config()
     pipeline_started = time.perf_counter()
     summary = {
         "paper": str(Path(pdf_path).resolve()),
@@ -296,11 +384,23 @@ def run_pipeline(
         },
         "stages": {},
     }
+    summary["llm"]["vision"] = {
+        "enabled": bool(vision_config.get("enabled", False)),
+        "provider": _optional_text(vision_config.get("provider")),
+        "model": _optional_text(vision_config.get("model")),
+    }
 
     try:
         console.print(Panel.fit("[bold]Stage 0: Parsing PDF[/bold]", style="blue"))
         with console.status(f"Extracting text from {pdf_path}..."):
             paper_text = extract_text(pdf_path)
+            # Keep page storage aligned with the parser's physical page order.
+            # The fallback also keeps mocked text-only pipeline tests usable.
+            page_texts = (
+                extract_page_texts(pdf_path)
+                if Path(pdf_path).exists()
+                else [paper_text]
+            )
         if not paper_text.strip():
             raise PipelineError("PDF contains no extractable text; OCR is required")
         console.print(f"  Extracted [green]{len(paper_text):,}[/green] characters")
@@ -310,6 +410,16 @@ def run_pipeline(
         text_dir = output_dir / "extracted_text"
         text_dir.mkdir(parents=True, exist_ok=True)
         (text_dir / "full_text.txt").write_text(paper_text, encoding="utf-8")
+        pages_dir = text_dir / "pages"
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        for page_number, page_text in enumerate(page_texts, 1):
+            (pages_dir / f"page_{page_number:04d}.txt").write_text(
+                page_text,
+                encoding="utf-8",
+            )
+        console.print(
+            f"  Stored [green]{len(page_texts)}[/green] page text files under: {pages_dir}"
+        )
 
         body_text, dropped_refs = trim_references(paper_text)
         if dropped_refs:
@@ -320,6 +430,7 @@ def run_pipeline(
 
         client = LLMClient()
         _print_llm_metadata(client)
+        _print_vision_metadata(vision_config)
         if scheme in (None, "auto"):
             try:
                 with console.status("Classifying target scheme with LLM..."):
@@ -351,12 +462,128 @@ def run_pipeline(
             f"latency default={profile.default_latency})"
         )
 
+        visual_evidence: list[dict] = []
+        if not vision_config.get("enabled", False):
+            _set_stage(summary, "figure_selection", "skipped", "vision disabled")
+            _set_stage(summary, "figure_analysis", "skipped", "vision disabled")
+        else:
+            console.print("  Extracting figure captions with PDF page mapping...")
+            candidates_path = output_dir / "figure_candidates.json"
+            evidence_path = output_dir / "vision_evidence.json"
+            figure_extraction_error = None
+            try:
+                figure_refs = extract_figure_captions(pdf_path)
+            except Exception as exc:
+                figure_refs = []
+                figure_extraction_error = str(exc)
+                console.print(f"  [yellow]Figure caption extraction failed: {exc}[/yellow]")
+            console.print(f"  Figure captions found: [green]{len(figure_refs)}[/green]")
+            if not figure_refs:
+                if figure_extraction_error:
+                    _write_json(candidates_path, {"figures": [], "error": figure_extraction_error})
+                    _write_json(
+                        evidence_path,
+                        {"evidence": [], "errors": [{"stage": "caption_extraction", "error": figure_extraction_error}]},
+                    )
+                    _set_stage(summary, "figure_selection", "unverified", figure_extraction_error)
+                else:
+                    _write_json(candidates_path, [])
+                    _write_json(evidence_path, {"evidence": [], "errors": []})
+                    _set_stage(summary, "figure_selection", "skipped", "no figure captions found")
+                _set_stage(summary, "figure_analysis", "skipped", "no relevant figure captions")
+            else:
+                selection_failed = False
+                try:
+                    candidates = classify_figure_captions(
+                        figure_refs,
+                        client,
+                        progress=lambda message: console.print(f"  {message}"),
+                    )
+                    _write_json(candidates_path, candidates)
+                    relevant = [item for item in candidates if item.get("relevant")]
+                    if relevant:
+                        locations = ", ".join(
+                            f"{item['figure_id']} (PDF page {item.get('pdf_page', item.get('page'))})"
+                            for item in relevant
+                        )
+                        console.print(f"  Relevant figures: [cyan]{locations}[/cyan]")
+                    else:
+                        console.print("  Relevant figures: [dim]none[/dim]")
+                    _set_stage(
+                        summary,
+                        "figure_selection",
+                        "passed",
+                        f"{sum(bool(item.get('relevant')) for item in candidates)} relevant figure(s)",
+                    )
+                except Exception as exc:
+                    candidates = []
+                    selection_failed = True
+                    console.print(f"  [yellow]Figure caption selection failed: {exc}[/yellow]")
+                    _write_json(candidates_path, {"figures": figure_refs, "error": str(exc)})
+                    _write_json(
+                        evidence_path,
+                        {"evidence": [], "errors": [{"stage": "selection", "error": str(exc)}]},
+                    )
+                    _set_stage(summary, "figure_selection", "unverified", str(exc))
+                    _set_stage(summary, "figure_analysis", "skipped", "figure selection failed")
+
+                relevant_candidates = [item for item in candidates if item.get("relevant")]
+                if selection_failed:
+                    pass
+                elif not relevant_candidates:
+                    _write_json(evidence_path, {"evidence": [], "errors": []})
+                    _set_stage(summary, "figure_analysis", "skipped", "no relevant figure captions")
+                else:
+                    try:
+                        vision_client = LLMClient(config=vision_config, vision=True)
+                        visual_evidence, vision_errors = analyze_figure_pages(
+                            pdf_path,
+                            figure_refs,
+                            relevant_candidates,
+                            output_dir,
+                            vision_client,
+                            progress=lambda message: console.print(f"  {message}"),
+                        )
+                        _write_json(
+                            evidence_path,
+                            {"evidence": visual_evidence, "errors": vision_errors},
+                        )
+                        console.print(
+                            f"  Vision evidence collected: [green]{len(visual_evidence)}[/green] page(s)"
+                        )
+                        if vision_errors:
+                            console.print(
+                                f"  [yellow]Vision analysis errors: {len(vision_errors)} page(s); "
+                                "continuing with text evidence[/yellow]"
+                            )
+                            _set_stage(
+                                summary,
+                                "figure_analysis",
+                                "unverified",
+                                f"{len(vision_errors)} figure page(s) failed",
+                            )
+                        else:
+                            _set_stage(
+                                summary,
+                                "figure_analysis",
+                                "passed",
+                                f"{len(visual_evidence)} page(s) analyzed",
+                            )
+                    except Exception as exc:
+                        _write_json(
+                            evidence_path,
+                            {"evidence": [], "errors": [{"stage": "analysis", "error": str(exc)}]},
+                        )
+                        console.print(f"  [yellow]Vision analysis unavailable: {exc}[/yellow]")
+                        _set_stage(summary, "figure_analysis", "unverified", str(exc))
+
         console.print(Panel.fit("[bold]Stage 1: Extracting Innovations[/bold]", style="blue"))
         with console.status("Analyzing paper with LLM ..."):
             analysis = extract_innovations(
                 body_text,
                 client,
                 scheme=profile,
+                visual_evidence=visual_evidence,
             )
         spec_path = save_specs(analysis, output_dir)
         _set_stage(summary, "extract", "passed", str(spec_path))
@@ -374,8 +601,9 @@ def run_pipeline(
 
         if not analysis.innovations:
             _set_stage(summary, "generate", "skipped", "No innovations found")
-            summary["status"] = "passed"
-            _update_timing(summary, pipeline_started, client)
+            statuses = [stage["status"] for stage in summary["stages"].values()]
+            summary["status"] = "unverified" if "unverified" in statuses else "passed"
+            _update_timing(summary, pipeline_started, client, vision_client, vision_config)
             _write_summary(output_dir, summary)
             console.print("[yellow]No innovations found in the paper.[/yellow]")
             return output_dir
@@ -384,8 +612,9 @@ def run_pipeline(
             _set_stage(summary, "generate", "skipped", "--dry-run")
             _set_stage(summary, "verification", "skipped", "--dry-run")
             _set_stage(summary, "synthesis_modmul", "skipped", "--dry-run")
-            summary["status"] = "passed"
-            _update_timing(summary, pipeline_started, client)
+            statuses = [stage["status"] for stage in summary["stages"].values()]
+            summary["status"] = "unverified" if "unverified" in statuses else "passed"
+            _update_timing(summary, pipeline_started, client, vision_client, vision_config)
             _write_summary(output_dir, summary)
             console.print("[yellow]--dry-run: skipping Verilog generation.[/yellow]")
             return output_dir
@@ -548,7 +777,7 @@ def run_pipeline(
 
         statuses = [stage["status"] for stage in summary["stages"].values()]
         summary["status"] = "unverified" if "unverified" in statuses or "unavailable" in statuses else "passed"
-        _update_timing(summary, pipeline_started, client)
+        _update_timing(summary, pipeline_started, client, vision_client, vision_config)
         _write_summary(output_dir, summary)
         if summary["status"] == "passed":
             console.print(f"\n[bold green]Done![/bold green] All outputs in: {output_dir}")
@@ -562,7 +791,7 @@ def run_pipeline(
         summary["status"] = "failed"
         summary["error"] = str(exc)
         if output_dir is not None:
-            _update_timing(summary, pipeline_started, client)
+            _update_timing(summary, pipeline_started, client, vision_client, vision_config)
             _write_summary(output_dir, summary)
             # Let the batch caller retain a failed paper's output directory.
             try:

@@ -88,6 +88,7 @@ def extract_innovations(
     max_chars: int | None = None,
     max_retries: int = 2,
     scheme: SchemeProfile | None = None,
+    visual_evidence: list[dict] | None = None,
 ) -> PaperAnalysis:
     """
     Extract innovative hardware modules from paper text.
@@ -133,6 +134,11 @@ def extract_innovations(
         "extract_innovation.jinja",
         paper_text=truncated,
         truncation_note=truncation_note,
+        visual_evidence=(
+            json.dumps(visual_evidence, ensure_ascii=False, indent=2)
+            if visual_evidence
+            else ""
+        ),
         **render_vars(profile),
     )
 
@@ -140,6 +146,9 @@ def extract_innovations(
         "You are an expert hardware design analyst. "
         "You extract novel hardware innovations from academic papers "
         "and produce detailed hardware module specifications. "
+        "Extract only designs proposed or explicitly modified by the paper's authors; "
+        "treat cited prior work, baselines, comparisons, and reproduced designs as context, "
+        "not as the paper's innovation. "
         "Respond ONLY with valid JSON, no other text."
     )
 
@@ -217,10 +226,10 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
                 for p in normalized_ports
             ]
 
-        try:
-            correction_factor = int(hw.get("correction_factor", 1))
-        except (TypeError, ValueError):
-            correction_factor = 1
+        correction_factor = _parse_correction_factor(
+            hw,
+            summary=item.get("summary", ""),
+        )
 
         try:
             latency_cycles = int(hw.get("latency_cycles", 0))
@@ -256,6 +265,64 @@ def _parse_analysis(data: dict) -> PaperAnalysis:
         # str() guards against a non-string (e.g. a list) from the LLM.
         fpga_device=str(data.get("fpga_device") or "").strip(),
     )
+
+
+def _parse_correction_factor(hardware_spec: dict, summary: str = "") -> int:
+    """Parse a signed factor from the module's *output* semantics.
+
+    Reduction internals often contain negative constant multiplications (for
+    example ``-13 * Cl``) even when the final result is ``+13*A*B mod q``.
+    Only flip a positive factor when a negative expression is explicitly tied
+    to the output/result, so those internal steps cannot corrupt verification.
+    """
+    try:
+        factor = int(hardware_spec.get("correction_factor", 1))
+    except (TypeError, ValueError):
+        return 1
+    if factor <= 0:
+        return factor
+
+    # Models sometimes return the magnitude (13) even when the surrounding
+    # algorithm text explicitly says ``C' = -k*C`` or ``R = -13*A*B``.
+    # Normalize common PDF punctuation before checking the output expression.
+    output_desc = " ".join(
+        str(port.get("desc", ""))
+        for port in (hardware_spec.get("ports", {}) or {}).get("output", [])
+        if isinstance(port, dict)
+    )
+    evidence = " ".join(
+        [summary, output_desc]
+        + [str(hardware_spec.get(field, "")) for field in ("behavior", "timing", "constraints")]
+    )
+    evidence = (
+        evidence.replace("−", "-")
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("′", "'")
+    )
+    factor_token = rf"(?:{re.escape(str(factor))}(?!\d)|[kK])"
+    product_tail = (
+        r"(?:\s*(?:\*|x|×|·)\s*)?\(?\s*"
+        r"(?:A|B|C|P_R|product|a|b|c)\b"
+        r"(?:\s*(?:\*|x|×|·)\s*(?:A|B|C|P_R|product|a|b|c)\b)?"
+    )
+
+    # Direct assignment is the least ambiguous form: C' = -k*C, R = -13*A*B.
+    direct_output = re.search(
+        rf"(?:\bR\b|\bC\s*'?)\s*(?:=|is)\s*-\s*{factor_token}"
+        rf"{product_tail}",
+        evidence,
+        re.IGNORECASE,
+    )
+    # Also accept prose such as "the output represents -13*(A*B) mod q";
+    # keep the match within one sentence to avoid unrelated internal steps.
+    prose_output = re.search(
+        rf"\b(?:output|result(?:ing)?|reduced\s+(?:product|result|value)|module\s+output)\b"
+        rf"[^.!?;\n]{{0,100}}?-\s*{factor_token}{product_tail}",
+        evidence,
+        re.IGNORECASE,
+    )
+    return -factor if direct_output or prose_output else factor
 
 
 def save_specs(analysis: PaperAnalysis, output_dir: Path) -> Path:

@@ -58,9 +58,10 @@ Return a JSON object with this exact structure:
 4. If the paper proposes a modification to an existing structure, only capture the modified part (not the whole structure).
 5. Use the paper's exact parameter names and values where possible.
 6. If port widths depend on paper parameters, express them as parameter expressions (e.g., "2*DATA_WIDTH", "LOG_N").
-7. **correction_factor** — CRITICAL for modular multipliers. Some reduction algorithms output `k*a*b mod q`, off by a known constant `k`, instead of `a*b mod q`. Set this field to that factor (for example, 13 for Kyber K-reduction). If the algorithm produces the ordinary reduced product, set it to 1. Read the algorithm's stated result carefully and preserve its actual output semantics.
+7. **correction_factor** — CRITICAL for modular multipliers. This is a signed integer `k` such that the module output is `k*(A*B) mod q`. Preserve the sign exactly: `k*A*B mod q` => `k`, while `-k*A*B mod q` or `C' = -k*C mod q` => `-k` (do NOT return the positive magnitude). For example, Kyber K-reduction may use `13`; a negated K-reduction must use `-13`. If the algorithm produces the ordinary reduced product, set it to 1. Read the algorithm's stated result carefully and preserve its actual output semantics. In `behavior`, explicitly end with `Output semantics: R = <signed integer> * (A*B) mod q`; use the actual signed integer, including its minus sign.
 8. **latency_cycles** — for modular_arithmetic modules: the total number of clock cycles from when valid A/B appear at the module inputs to when R is valid at the output, counting EVERY register stage in the datapath INCLUDING the product register. Purely combinational reduction after the product register => latency_cycles = 1. A pipelined reduction with N register stages after P_R => latency_cycles = 1 + N. If unknown, set 0 (the pipeline applies a scheme default).
 9. **fpga_device** — the FPGA the paper's OWN implementation was tested on (look in the implementation / experimental-results section). Copy it EXACTLY as printed, including package and speed grade when given (e.g. `xc7a200tffg1156-3`). Papers usually report several devices when comparing against prior work — report the one the paper's own design was synthesized for, NOT the devices cited from other papers' results. If the paper gives only a device name (`XC7A100T`) or a family (`Artix-7`), report that. Use `""` if no device is stated. If the text below is marked as a truncated excerpt, never guess a device that might appear in the missing part — report `""`.
+10. **AUTHORSHIP** — extract only a design proposed by the paper's authors or a change they explicitly introduce. Figures and algorithms identified as prior work, cited work (for example, Ni et al. or Nguyen et al.), baselines, comparison targets, or reproduced implementations are context only and MUST NOT be reported as this paper's innovation. If the authors modify prior work, report only the authors' new modification, not the unchanged prior design.
 
 ## CRITICAL: Target Interface Constraint
 
@@ -94,4 +95,15 @@ The module has TWO parts:
 
 {% if truncation_note is defined and truncation_note %}
 {{ truncation_note }}
+{% endif %}
+
+{% if visual_evidence is defined and visual_evidence %}
+## Visual evidence from selected hardware figures
+
+The following evidence was extracted from figure pages selected by a separate
+text classifier. Use it only when consistent with the paper text. It may
+supplement visible datapath, register, width, latency, and correction-factor
+details, but do not invent facts that are absent from both sources:
+
+{{ visual_evidence }}
 {% endif %}

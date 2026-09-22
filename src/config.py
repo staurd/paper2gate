@@ -84,6 +84,25 @@ def get_llm_config() -> dict:
     return cfg
 
 
+def get_vision_config() -> dict:
+    """Return the optional independent multimodal provider configuration."""
+    raw_llm = load_config().get("llm", {})
+    raw = raw_llm.get("vision", {}) if isinstance(raw_llm, dict) else {}
+    cfg = dict(raw) if isinstance(raw, dict) else {}
+    cfg["enabled"] = bool(cfg.get("enabled", False))
+    provider = str(cfg.get("provider", "")).strip().lower()
+    cfg["provider"] = provider
+
+    env_names = {
+        "deepseek": "DEEPSEEK_API_KEY",
+        "openai": "OPENAI_API_KEY",
+    }
+    env_name = env_names.get(provider)
+    if env_name and os.environ.get(env_name):
+        cfg["api_key"] = os.environ[env_name]
+    return cfg
+
+
 def get_iverilog_config() -> dict:
     cfg = dict(load_config().get("iverilog", {}))
     cfg["binary"] = _resolve_tool_path(

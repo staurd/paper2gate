@@ -1,0 +1,22 @@
+Classify the following academic-paper figure captions.
+
+Keep only figures that are strongly related to a modular multiplication or modular reduction hardware datapath. A figure is relevant when it shows or describes the arithmetic unit, reduction stages, partial products, quotient approximation, conditional subtraction, DSP multiplier integration, or pipeline registers for that arithmetic. Do not select figures that only show NTT/FFT, butterfly, memory, permutation, address generation, serialization, or system-level control.
+
+Return a JSON array with one object for each supplied figure:
+
+[
+  {
+    "figure_id": "fig_4",
+    "pdf_page": 7,
+    "relevant": true,
+    "category": "modular_reduction",
+    "confidence": 0.96,
+    "reason": "Why this caption is or is not relevant"
+  }
+]
+
+The `pdf_page` value is the 1-based physical PDF page from the supplied
+record. Do not invent figure IDs or page numbers.
+
+Figure captions and page context:
+{{ figures_json }}

@@ -1,8 +1,10 @@
 """Run Vivado synthesis on generated modmul and extract resource usage."""
 
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from src.config import get_vivado_config
@@ -112,27 +114,56 @@ def run_synthesis(
     output_dir = (Path(output_dir) / "synthesis" / "modmul").resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write TCL script using absolute paths for robustness
+    # Write the reproducible script in the output directory, but execute a
+    # second copy from a short temporary working directory. Vivado creates
+    # .Xil/realtime files relative to cwd, and long batch paper paths can make
+    # those internal paths exceed Windows' legacy path limit.
     tcl = _generate_tcl(verilog_files, part, output_dir)
     tcl_path = output_dir / "_synth.tcl"
     tcl_path.write_text(tcl, encoding="utf-8")
+    work_dir = Path(tempfile.mkdtemp(prefix="paper2gate_vivado_"))
+    work_tcl_path = work_dir / "_synth.tcl"
+    work_tcl_path.write_text(tcl, encoding="utf-8")
+
+    env = os.environ.copy()
+    vivado_path = Path(vivado)
+    if not vivado_path.exists():
+        located = shutil.which(vivado)
+        if located:
+            vivado_path = Path(located)
+    vivado_root = vivado_path.resolve().parent.parent
+    if (vivado_root / "bin" / "unwrapped" / "win64.o" / "vivado.exe").exists():
+        # Some embedded/hosted shells omit these standard Windows variables;
+        # Vivado's launcher then incorrectly selects its unavailable win32
+        # runtime even though the 64-bit installation is present.
+        env.setdefault("PROCESSOR_ARCHITECTURE", "AMD64")
+        env.setdefault("PROCESSOR_ARCHITEW6432", "AMD64")
 
     console.print(f"    Part: [cyan]{part}[/cyan]   (top: modmul)")
     console.print("    Running Vivado synthesis (~20s)...")
     try:
         result = subprocess.run(
-            [vivado, "-mode", "batch", "-source", str(tcl_path)],
-            capture_output=True, text=True, timeout=120,
-            cwd=str(output_dir),
+            [vivado, "-mode", "batch", "-source", str(work_tcl_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(work_dir),
+            env=env,
         )
         (output_dir / "vivado_stdout.log").write_text(result.stdout, encoding="utf-8", errors="replace")
         (output_dir / "vivado_stderr.log").write_text(result.stderr, encoding="utf-8", errors="replace")
+        for log_name in ("vivado.log", "vivado.jou"):
+            log_path = work_dir / log_name
+            if log_path.exists():
+                shutil.copy2(log_path, output_dir / log_name)
     except FileNotFoundError:
         console.print("    [yellow]Vivado not found — skipping synthesis[/yellow]")
         return None
     except subprocess.TimeoutExpired:
         console.print("    [yellow]Vivado timed out[/yellow]")
         return None
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
     if result.returncode != 0:
         console.print("    [red]Vivado synthesis failed[/red]")

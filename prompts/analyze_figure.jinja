@@ -1,0 +1,27 @@
+Analyze the hardware figures on physical PDF page {{ page }} (1-based).
+
+The supplied page image may contain unrelated diagrams. Focus only on the listed figures that concern modular multiplication or modular reduction. Extract visible information or information inferred from the figure about:
+- operand, product, intermediate, and output widths;
+- register boundaries and pipeline stages;
+- latency or throughput ;
+- correction/scaling factors and constants;
+- DSP, LUT, BRAM, or other implementation hints.
+
+Return one JSON object with this shape:
+
+{
+  "pdf_page": {{ page }},
+  "figures": ["fig_4"],
+  "relevant": true,
+  "algorithm": "description",
+  "datapath": ["step 1", "step 2"],
+  "pipeline_registers": 0,
+  "latency_cycles": 0,
+  "correction_factor": 1,
+  "evidence": ["specific visible evidence"]
+}
+
+Use 0 for unknown numeric values. Do not guess details that are not visible or present in the caption/context.
+
+Selected figure captions and page context:
+{{ figures_json }}

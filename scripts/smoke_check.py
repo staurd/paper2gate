@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import base64
 from types import SimpleNamespace
 from io import StringIO
 from pathlib import Path
@@ -14,9 +15,14 @@ from rich.console import Console
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import get_llm_config, load_config  # noqa: E402
+from src.config import get_llm_config, get_vision_config, load_config  # noqa: E402
 from src.code_generator import _fix_from_iverilog, fix_from_verification, generate_modmul  # noqa: E402
-from src.innovation_extractor import classify_scheme, extract_innovations  # noqa: E402
+from src.figure_analysis import analyze_figure_pages, classify_figure_captions  # noqa: E402
+from src.innovation_extractor import (  # noqa: E402
+    _parse_analysis,
+    classify_scheme,
+    extract_innovations,
+)
 from src.ir_models import GeneratedModule, HardwareSpec, ModuleSpec, PaperAnalysis  # noqa: E402
 from src.llm_client import LLMClient  # noqa: E402
 from src.main import (  # noqa: E402
@@ -29,6 +35,7 @@ from src.main import (  # noqa: E402
     main as cli_main,
     run_pipeline,
 )
+from src.pdf_parser import extract_figure_captions  # noqa: E402
 from src.schemes import DILITHIUM, KYBER, resolve_scheme  # noqa: E402
 from src.verilog_utils import validate_modmul_interface  # noqa: E402
 from src.vivado_report import DEFAULT_PART, resolve_part  # noqa: E402
@@ -103,6 +110,7 @@ def main() -> None:
     assert "yosys" not in config, "Yosys configuration must be removed"
     assert config.get("llm", {}).get("provider"), "LLM provider is missing"
     assert set(config.get("llm", {}).get("providers", {})) >= {"deepseek", "openai"}
+    assert isinstance(config.get("llm", {}).get("vision", {}).get("enabled"), bool)
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "env-openai-key"}, clear=False), \
          patch(
@@ -166,6 +174,110 @@ def main() -> None:
         legacy_cfg = get_llm_config()
     assert legacy_cfg["model"] == "legacy-model"
     assert legacy_cfg["api_key"] == "legacy-key"
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "env-openai-key"}, clear=False), \
+         patch(
+             "src.config.load_config",
+             return_value={
+                 "llm": {
+                     "vision": {
+                         "enabled": True,
+                         "provider": "openai",
+                         "model": "vision-model",
+                         "api_key": "config-key",
+                     }
+                 }
+             },
+         ):
+        vision_cfg = get_vision_config()
+    assert vision_cfg["enabled"] is True
+    assert vision_cfg["provider"] == "openai"
+    assert vision_cfg["model"] == "vision-model"
+    assert vision_cfg["api_key"] == "env-openai-key"
+
+    multimodal_client = object.__new__(LLMClient)
+    multimodal_client.provider = "openai"
+    multimodal_client.vision = True
+    multimodal_client.model = "vision-model"
+    multimodal_client.extract_model = "vision-model"
+    multimodal_client.generate_model = "vision-model"
+    multimodal_client._timings = LLMClient._empty_timing_data()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as image_file:
+        image_file.write(b"fake-png")
+        image_path = Path(image_file.name)
+    captured_multimodal = {}
+
+    def capture_multimodal(system_prompt, user_prompt, model):
+        captured_multimodal.update(
+            {"system": system_prompt, "content": user_prompt, "model": model}
+        )
+        return '{"ok": true}'
+
+    try:
+        with patch.object(multimodal_client, "_call_openai_raw", side_effect=capture_multimodal):
+            assert multimodal_client.generate_multimodal_structured(
+                "system", "analyze this", image_path
+            ) == '{"ok": true}'
+    finally:
+        image_path.unlink()
+    assert captured_multimodal["model"] == "vision-model"
+    assert captured_multimodal["content"][0] == {"type": "text", "text": "analyze this"}
+    image_url = captured_multimodal["content"][1]["image_url"]["url"]
+    assert image_url.startswith("data:image/png;base64,")
+    assert base64.b64decode(image_url.split(",", 1)[1]) == b"fake-png"
+
+    import fitz
+
+    with tempfile.TemporaryDirectory() as figure_temp_dir:
+        figure_pdf = Path(figure_temp_dir) / "figures.pdf"
+        document = fitz.open()
+        first_page = document.new_page()
+        first_page.insert_text((72, 72), "Figure 1: Proposed modular reduction datapath\nFigure 2: NTT butterfly")
+        second_page = document.new_page()
+        second_page.insert_text((72, 72), "Fig. 3. Pipelined modular multiplier")
+        document.save(figure_pdf)
+        document.close()
+        figures = extract_figure_captions(str(figure_pdf))
+        assert [item["figure_id"] for item in figures] == ["fig_1", "fig_2", "fig_3"]
+        assert [item["page"] for item in figures] == [1, 1, 2]
+
+        classifier = RecordingClient(
+            '[{"figure_id":"fig_1","page":1,"relevant":true,"category":"modular_reduction","confidence":0.9,"reason":"datapath"},{"figure_id":"fig_2","page":1,"relevant":false},{"figure_id":"fig_3","page":2,"relevant":true,"category":"modular_multiplication","confidence":0.8}]'
+        )
+        progress_messages = []
+        candidates = classify_figure_captions(figures, classifier, progress=progress_messages.append)
+        assert [item["figure_id"] for item in candidates if item["relevant"]] == ["fig_1", "fig_3"]
+        assert classifier.calls[0]["operation"] == "classify_figures"
+        assert any("Classifying figure captions" in message for message in progress_messages)
+
+        vision_client = object.__new__(LLMClient)
+        vision_client.provider = "openai"
+        vision_client.model = "vision-model"
+        vision_client.extract_model = "vision-model"
+        vision_client.generate_model = "vision-model"
+        vision_client._timings = LLMClient._empty_timing_data()
+        vision_client.generate_multimodal_structured = lambda *args, **kwargs: '{"relevant":true,"datapath":["DSP","reduction"],"latency_cycles":3}'
+        evidence, errors = analyze_figure_pages(
+            str(figure_pdf),
+            figures,
+            candidates,
+            Path(figure_temp_dir) / "output",
+            vision_client,
+            progress=progress_messages.append,
+        )
+        assert errors == []
+        assert len(evidence) == 2
+        assert any("Rendering PDF page 1" in message for message in progress_messages)
+        assert any("Analyzing PDF page 2" in message for message in progress_messages)
+        assert (Path(figure_temp_dir) / "output" / "figures" / "fig_1_page_1.png").exists()
+        assert (Path(figure_temp_dir) / "output" / "figures" / "fig_3_page_2.png").exists()
+
+    sample_paper = PROJECT_ROOT / "test_papers" / "A_Better_Kyber_Butterfly_for_FPGAs.pdf"
+    if sample_paper.exists():
+        sample_figures = extract_figure_captions(str(sample_paper))
+        fig4_pages = [item["pdf_page"] for item in sample_figures if item["figure_id"] == "fig_4"]
+        assert fig4_pages == [5], f"Figure 4 should map to PDF page 5, got {fig4_pages}"
+        assert all(item["source"] == "caption" for item in sample_figures)
 
     FakeOpenAI.instances = []
     FakeOpenAI.legacy_token_parameter = True
@@ -308,6 +420,53 @@ def main() -> None:
     extractor = RecordingClient('{"paper_title":"test","innovations":[]}')
     extract_innovations("Kyber modular reduction", extractor, scheme=KYBER)
     assert extractor.calls[-1]["operation"] == "extract_innovations"
+    visual_extractor = RecordingClient('{"paper_title":"test","innovations":[]}')
+    extract_innovations(
+        "Kyber modular reduction",
+        visual_extractor,
+        scheme=KYBER,
+        visual_evidence=[{"page": 4, "latency_cycles": 3, "evidence": ["register"]}],
+    )
+    assert "Visual evidence from selected hardware figures" in visual_extractor.calls[-1]["user_prompt"]
+    assert '"latency_cycles": 3' in visual_extractor.calls[-1]["user_prompt"]
+    assert "prior work" in visual_extractor.calls[-1]["user_prompt"]
+    signed_analysis = _parse_analysis(
+        {
+            "paper_title": "signed reduction",
+            "innovations": [
+                {
+                    "module_name": "modmul",
+                    "category": "modular_arithmetic",
+                    "summary": "A negated K-reduction.",
+                    "hardware_spec": {
+                        "behavior": "The algorithm outputs C' = -13*C mod 3329.",
+                        "correction_factor": 13,
+                    },
+                }
+            ],
+        }
+    )
+    assert signed_analysis.innovations[0].hardware_spec.correction_factor == -13
+    internal_negative_analysis = _parse_analysis(
+        {
+            "paper_title": "internal signed step",
+            "innovations": [
+                {
+                    "module_name": "modmul",
+                    "category": "modular_arithmetic",
+                    "summary": "A positive K-reduction output.",
+                    "hardware_spec": {
+                        "behavior": (
+                            "Compute the intermediate -13*Cl, then return "
+                            "R = 13*(A*B) mod 3329."
+                        ),
+                        "correction_factor": 13,
+                    },
+                }
+            ],
+        }
+    )
+    assert internal_negative_analysis.innovations[0].hardware_spec.correction_factor == 13
     spec = ModuleSpec(
         module_name="modmul",
         category="modular_arithmetic",

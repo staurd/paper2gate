@@ -2,6 +2,7 @@
 
 import re
 import time
+from pathlib import Path
 
 from src.config import get_llm_config
 
@@ -11,14 +12,19 @@ class LLMClient:
     TIMING_OPERATIONS = (
         "classify_scheme",
         "extract_innovations",
+        "classify_figures",
+        "analyze_figure_page",
         "generate_modmul",
         "fix_syntax",
         "fix_function",
     )
-    EXTRACT_OPERATIONS = frozenset({"classify_scheme", "extract_innovations"})
+    EXTRACT_OPERATIONS = frozenset(
+        {"classify_scheme", "extract_innovations", "classify_figures"}
+    )
 
-    def __init__(self):
-        llm_cfg = get_llm_config()
+    def __init__(self, config: dict | None = None, *, vision: bool = False):
+        llm_cfg = dict(config) if config is not None else get_llm_config()
+        self.vision = vision
         self.provider = str(llm_cfg.get("provider", "")).strip().lower()
         if self.provider not in self.SUPPORTED_PROVIDERS:
             supported = ", ".join(sorted(self.SUPPORTED_PROVIDERS))
@@ -71,11 +77,7 @@ class LLMClient:
         """Return the provider and effective model for each pipeline operation."""
         by_operation = {}
         for operation in self.TIMING_OPERATIONS:
-            model = (
-                self.extract_model
-                if operation in self.EXTRACT_OPERATIONS
-                else self.generate_model
-            )
+            model = self._model_for_operation(operation)
             by_operation[operation] = {
                 "provider": self.provider,
                 "model": model,
@@ -87,6 +89,13 @@ class LLMClient:
             "generate_model": self.generate_model,
             "by_operation": by_operation,
         }
+
+    def _model_for_operation(self, operation: str) -> str:
+        if self.vision and operation == "analyze_figure_page":
+            return self.model
+        if operation in self.EXTRACT_OPERATIONS:
+            return self.extract_model
+        return self.generate_model
 
     def _record_timing(self, operation: str, calls: int, seconds: float) -> None:
         if operation not in self._timings:
@@ -145,6 +154,54 @@ class LLMClient:
         finally:
             self._record_timing(operation_name, attempts, time.perf_counter() - started)
 
+    def generate_multimodal_structured(
+        self,
+        system_prompt: str,
+        user_text: str,
+        image_path: str | Path,
+        *,
+        max_retries: int = 2,
+        operation: str = "analyze_figure_page",
+    ) -> str:
+        """Send text plus a local image to an OpenAI-compatible vision model."""
+        if self.provider not in {"openai", "deepseek"}:
+            raise ValueError(
+                f"Vision requests require an OpenAI-compatible provider, got {self.provider!r}"
+            )
+        image_bytes = Path(image_path).read_bytes()
+        import base64
+
+        image_data = base64.b64encode(image_bytes).decode("ascii")
+        user_content = [
+            {"type": "text", "text": user_text},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_data}"},
+            },
+        ]
+        started = time.perf_counter()
+        attempts = 0
+        try:
+            last_error = None
+            for attempt in range(1 + max_retries):
+                attempts += 1
+                try:
+                    raw = self._call_openai_raw(
+                        system_prompt,
+                        user_content,
+                        self._model_for_operation(operation),
+                    )
+                    return self._extract_json(raw)
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < max_retries:
+                        time.sleep(2 ** attempt)
+            raise RuntimeError(
+                f"Vision API call failed after {max_retries + 1} attempts: {last_error}"
+            )
+        finally:
+            self._record_timing(operation, attempts, time.perf_counter() - started)
+
     def _get_client(self):
         if self._client is not None:
             return self._client
@@ -176,7 +233,12 @@ class LLMClient:
         )
         return response.content[0].text
 
-    def _call_openai_raw(self, system_prompt: str, user_prompt: str, model: str) -> str:
+    def _call_openai_raw(
+        self,
+        system_prompt: str,
+        user_prompt: str | list[dict],
+        model: str,
+    ) -> str:
         client = self._get_client()
         request = {
             "model": model,
@@ -234,9 +296,15 @@ class LLMClient:
         fence = re.search(r"```(?:json)?\s*\n(.*?)\n?```", text, re.DOTALL)
         if fence:
             text = fence.group(1).strip()
-        # Find the outermost { ... }
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            text = text[start : end + 1]
+        # Find the outermost JSON object or array.
+        object_start = text.find("{")
+        object_end = text.rfind("}")
+        array_start = text.find("[")
+        array_end = text.rfind("]")
+        if array_start != -1 and array_end > array_start and (
+            object_start == -1 or array_start < object_start
+        ):
+            text = text[array_start : array_end + 1]
+        elif object_start != -1 and object_end > object_start:
+            text = text[object_start : object_end + 1]
         return text
