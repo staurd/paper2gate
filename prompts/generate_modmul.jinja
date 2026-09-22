@@ -59,6 +59,16 @@ Implement the modular reduction algorithm described below. The reduction takes `
 ### Constraints
 {{constraints}}
 
+### Target FPGA
+{% if target_part %}
+Generate and optimize the RTL for the Vivado target part `{{target_part}}`. Use the target's
+resource and timing characteristics when choosing equivalent coding forms, while keeping the
+module synthesizable Verilog-2001. Do not instantiate vendor-specific primitives unless the
+paper's algorithm explicitly requires them.
+{% else %}
+No concrete FPGA part was supplied. Use portable synthesizable Verilog-2001.
+{% endif %}
+
 {% if parameters %}
 ### Paper Parameters
 {% for name, desc in parameters.items() %}

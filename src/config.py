@@ -53,8 +53,26 @@ def load_config() -> dict:
 
 
 def get_llm_config() -> dict:
-    cfg = dict(load_config().get("llm", {}))
-    provider = str(cfg.get("provider", "")).lower()
+    raw = dict(load_config().get("llm", {}))
+    provider = str(raw.get("provider", "")).strip().lower()
+
+    provider_configs = raw.get("providers")
+    if isinstance(provider_configs, dict):
+        selected = provider_configs.get(provider)
+        if not isinstance(selected, dict):
+            available = ", ".join(sorted(str(name) for name in provider_configs))
+            raise ValueError(
+                f"No LLM configuration found for provider {provider!r}. "
+                f"Available providers: {available or 'none'}."
+            )
+        common = raw.get("common", {})
+        cfg = dict(common) if isinstance(common, dict) else {}
+        cfg.update(selected)
+        cfg["provider"] = provider
+    else:
+        # Keep accepting the original flat llm configuration.
+        cfg = raw
+
     env_names = {
         "deepseek": "DEEPSEEK_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",

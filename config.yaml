@@ -1,16 +1,24 @@
 llm:
-  provider: deepseek           # anthropic | openai | deepseek
-  model: deepseek-v4-pro
-  # Override per stage (optional):
-  # extract_model: deepseek-reasoner   # reasoning model for complex extraction
-  # generate_model: deepseek-chat      # standard model for code generation
-  api_key: ${DEEPSEEK_API_KEY}  # resolved from env var
-  max_tokens: 8192
-  temperature: 0.2
-  # Character budget for the paper text sent to the extraction prompt. The
-  # references section is trimmed first, so this only needs to cover the body.
-  # Lower it to trade extraction cost/time for depth of reading.
-  max_paper_chars: 100000
+  provider: openai           # anthropic | openai | deepseek
+  common:
+    max_tokens: 8192
+    temperature: 0.2
+    # Character budget for the paper text sent to the extraction prompt. The
+    # references section is trimmed first, so this only needs to cover the body.
+    # Lower it to trade extraction cost/time for depth of reading.
+    max_paper_chars: 100000
+  providers:
+    deepseek:
+      model: deepseek-v4-pro
+      # Override per stage (optional):
+      # extract_model: deepseek-reasoner
+      # generate_model: deepseek-chat
+      api_key: ${DEEPSEEK_API_KEY}
+      base_url: https://api.deepseek.com
+    openai:
+      model: gpt-5.6-terra
+      api_key: ${OPENAI_API_KEY}
+      base_url: https://zyrus.aitoken.credit/v1
 
 output:
   base_dir: outputs

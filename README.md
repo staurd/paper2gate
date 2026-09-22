@@ -34,6 +34,36 @@ PAPER2GATE_VIVADO_BINARY
 
 Empty tool paths in `config.yaml` mean that the executable is searched on `PATH`.
 
+## LLM provider configuration
+
+Both providers are preconfigured under `llm.providers`; change only
+`llm.provider` to switch between them. DeepSeek remains the default:
+
+```yaml
+llm:
+  provider: deepseek  # change to openai to use the GPT relay
+  common:
+    max_tokens: 8192
+    temperature: 0.2
+  providers:
+    deepseek:
+      model: deepseek-v4-pro
+      api_key: ${DEEPSEEK_API_KEY}
+      base_url: https://api.deepseek.com
+    openai:
+      model: gpt-4o
+      api_key: ${OPENAI_API_KEY}
+      base_url: https://zyrus.aitoken.credit/v1
+```
+
+The selected provider's model, API key, and endpoint are merged automatically
+into the client configuration. The `base_url` should normally include `/v1`.
+The optional `extract_model` and `generate_model` settings can select different
+models for paper extraction and Verilog generation. Store API keys in the
+corresponding environment variable (or `.env`); do not commit keys to the
+repository. If a relay rejects `max_completion_tokens`, the client retries that
+request with the older `max_tokens` parameter.
+
 ## Pipeline
 
 `extracted_text/full_text.txt` keeps the original PDF text. In auto mode, an LLM classifies the target scheme from the first 2,000 characters after the trailing references section is trimmed. Ambiguous classifications stop that paper; use `--scheme` to select a profile explicitly. Innovation extraction then uses the selected profile and the trimmed paper text.

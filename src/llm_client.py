@@ -7,6 +7,7 @@ from src.config import get_llm_config
 
 
 class LLMClient:
+    SUPPORTED_PROVIDERS = frozenset({"anthropic", "deepseek", "openai"})
     TIMING_OPERATIONS = (
         "classify_scheme",
         "extract_innovations",
@@ -17,7 +18,13 @@ class LLMClient:
 
     def __init__(self):
         llm_cfg = get_llm_config()
-        self.provider = llm_cfg["provider"]
+        self.provider = str(llm_cfg.get("provider", "")).strip().lower()
+        if self.provider not in self.SUPPORTED_PROVIDERS:
+            supported = ", ".join(sorted(self.SUPPORTED_PROVIDERS))
+            raise ValueError(
+                f"Unsupported LLM provider {self.provider!r}. "
+                f"Choose one of: {supported}."
+            )
         self.model = llm_cfg["model"]
         self.extract_model = llm_cfg.get("extract_model", llm_cfg["model"])
         self.generate_model = llm_cfg.get("generate_model", llm_cfg["model"])
@@ -32,7 +39,8 @@ class LLMClient:
             )
 
         self._api_key = api_key
-        self._base_url = llm_cfg.get("base_url", None)
+        configured_base_url = str(llm_cfg.get("base_url") or "").strip()
+        self._base_url = configured_base_url.rstrip("/") or None
         self._client = None  # lazy init
         self._timings = self._empty_timing_data()
 
@@ -97,7 +105,7 @@ class LLMClient:
                 try:
                     if self.provider == "anthropic":
                         raw = self._call_anthropic_raw(system_prompt, user_prompt, model)
-                    else:
+                    elif self.provider in ("deepseek", "openai"):
                         raw = self._call_openai_raw(system_prompt, user_prompt, model)
 
                     if stage == "extract":
@@ -125,14 +133,14 @@ class LLMClient:
             from openai import OpenAI
             self._client = OpenAI(
                 api_key=self._api_key,
-                base_url="https://api.deepseek.com",
+                base_url=self._base_url or "https://api.deepseek.com",
             )
-        else:
+        elif self.provider == "openai":
             from openai import OpenAI
-            self._client = OpenAI(
-                api_key=self._api_key,
-                base_url=self._base_url,
-            )
+            kwargs = {"api_key": self._api_key}
+            if self._base_url:
+                kwargs["base_url"] = self._base_url
+            self._client = OpenAI(**kwargs)
         return self._client
 
     def _call_anthropic_raw(self, system_prompt: str, user_prompt: str, model: str) -> str:
@@ -148,16 +156,46 @@ class LLMClient:
 
     def _call_openai_raw(self, system_prompt: str, user_prompt: str, model: str) -> str:
         client = self._get_client()
-        response = client.chat.completions.create(
-            model=model,
-            max_completion_tokens=self.max_tokens,
-            temperature=self.temperature,
-            messages=[
+        request = {
+            "model": model,
+            "max_completion_tokens": self.max_tokens,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-        )
+        }
+        if self.temperature is not None:
+            request["temperature"] = self.temperature
+        try:
+            response = client.chat.completions.create(**request)
+        except Exception as exc:
+            if not self._is_legacy_token_error(exc):
+                raise
+            request["max_tokens"] = request.pop("max_completion_tokens")
+            response = client.chat.completions.create(**request)
         return response.choices[0].message.content or ""
+
+    @staticmethod
+    def _is_legacy_token_error(error: Exception) -> bool:
+        """Return whether a relay rejected the modern token-limit parameter."""
+        message = str(error).lower()
+        if "max_completion_tokens" not in message:
+            return False
+        return any(
+            marker in message
+            for marker in (
+                "unsupported",
+                "unknown",
+                "unrecognized",
+                "unexpected",
+                "invalid",
+                "not support",
+                "does not support",
+                "not allowed",
+                "not accepted",
+                "extra",
+            )
+        )
 
     @staticmethod
     def _extract_json(text: str) -> str:

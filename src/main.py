@@ -305,7 +305,8 @@ def run_pipeline(
             return output_dir
 
         selected_specs = _select_specs(analysis.innovations)
-        synth_part = resolve_synth_part(part, analysis.fpga_device) if use_synth else None
+        target_part = resolve_synth_part(part, analysis.fpga_device)
+        synth_part = target_part if use_synth else None
         summary["synthesis_part"] = synth_part
 
         console.print(Panel.fit("[bold]Stage 2: Generating Verilog[/bold]", style="blue"))
@@ -324,6 +325,7 @@ def run_pipeline(
                     module_spec,
                     client,
                     scheme=profile,
+                    target_part=target_part,
                 )
                 save_error_logs(error_logs, module_spec.module_name, review_dir)
             else:
@@ -331,6 +333,7 @@ def run_pipeline(
                     module_spec,
                     client,
                     scheme=profile,
+                    target_part=target_part,
                 )
 
             interface_errors = validate_modmul_interface(

@@ -1,8 +1,10 @@
 """Offline smoke checks for the Paper2Gate pipeline."""
 
 import json
+import os
 import sys
 import tempfile
+from types import SimpleNamespace
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -12,7 +14,7 @@ from rich.console import Console
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import load_config  # noqa: E402
+from src.config import get_llm_config, load_config  # noqa: E402
 from src.code_generator import _fix_from_iverilog, fix_from_verification, generate_modmul  # noqa: E402
 from src.innovation_extractor import classify_scheme, extract_innovations  # noqa: E402
 from src.ir_models import GeneratedModule, HardwareSpec, ModuleSpec, PaperAnalysis  # noqa: E402
@@ -55,6 +57,32 @@ class RecordingClient:
         return self.response
 
 
+class FakeOpenAICompletions:
+    def __init__(self, legacy_token_parameter=False):
+        self.calls = []
+        self.legacy_token_parameter = legacy_token_parameter
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.legacy_token_parameter and "max_completion_tokens" in kwargs:
+            raise RuntimeError("unsupported parameter: max_completion_tokens")
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+        )
+
+
+class FakeOpenAI:
+    instances = []
+    legacy_token_parameter = False
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.chat = SimpleNamespace(
+            completions=FakeOpenAICompletions(self.legacy_token_parameter)
+        )
+        self.__class__.instances.append(self)
+
+
 def make_timing_client() -> LLMClient:
     client = object.__new__(LLMClient)
     client.provider = "openai"
@@ -71,6 +99,126 @@ def main() -> None:
     config = load_config()
     assert "yosys" not in config, "Yosys configuration must be removed"
     assert config.get("llm", {}).get("provider"), "LLM provider is missing"
+    assert set(config.get("llm", {}).get("providers", {})) >= {"deepseek", "openai"}
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "env-openai-key"}, clear=False), \
+         patch(
+             "src.config.load_config",
+             return_value={
+                 "llm": {
+                     "provider": "openai",
+                     "common": {"max_tokens": 4096},
+                     "providers": {
+                         "deepseek": {
+                             "model": "deepseek-model",
+                             "api_key": "deepseek-config-key",
+                         },
+                         "openai": {
+                             "model": "relay-model",
+                             "api_key": "",
+                             "base_url": "https://zyrus.aitoken.credit/v1",
+                         },
+                     },
+                 }
+             },
+         ):
+        openai_cfg = get_llm_config()
+    assert openai_cfg["api_key"] == "env-openai-key"
+    assert openai_cfg["provider"] == "openai"
+    assert openai_cfg["model"] == "relay-model"
+    assert openai_cfg["max_tokens"] == 4096
+    assert openai_cfg["base_url"] == "https://zyrus.aitoken.credit/v1"
+
+    with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "env-deepseek-key"}, clear=False), \
+         patch(
+             "src.config.load_config",
+             return_value={
+                 "llm": {
+                     "provider": "deepseek",
+                     "providers": {
+                         "deepseek": {
+                             "model": "deepseek-model",
+                             "api_key": "",
+                         },
+                         "openai": {"model": "relay-model"},
+                     },
+                 }
+             },
+         ):
+        deepseek_cfg = get_llm_config()
+    assert deepseek_cfg["provider"] == "deepseek"
+    assert deepseek_cfg["model"] == "deepseek-model"
+    assert deepseek_cfg["api_key"] == "env-deepseek-key"
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False), patch(
+        "src.config.load_config",
+        return_value={
+            "llm": {
+                "provider": "openai",
+                "model": "legacy-model",
+                "api_key": "legacy-key",
+            }
+        },
+    ):
+        legacy_cfg = get_llm_config()
+    assert legacy_cfg["model"] == "legacy-model"
+    assert legacy_cfg["api_key"] == "legacy-key"
+
+    FakeOpenAI.instances = []
+    FakeOpenAI.legacy_token_parameter = True
+    with patch(
+        "src.llm_client.get_llm_config",
+        return_value={
+            "provider": "openai",
+            "model": "relay-model",
+            "api_key": "config-key",
+            "base_url": "https://zyrus.aitoken.credit/v1/",
+            "max_tokens": 4096,
+            "temperature": 0.2,
+        },
+    ), patch("openai.OpenAI", FakeOpenAI):
+        relay_client = LLMClient()
+        assert relay_client._call_openai_raw("system", "user", "relay-model") == "ok"
+    assert FakeOpenAI.instances[0].kwargs == {
+        "api_key": "config-key",
+        "base_url": "https://zyrus.aitoken.credit/v1",
+    }
+    relay_calls = FakeOpenAI.instances[0].chat.completions.calls
+    assert "max_completion_tokens" in relay_calls[0]
+    assert relay_calls[1]["max_tokens"] == 4096
+    assert relay_calls[1]["model"] == "relay-model"
+    assert relay_calls[1]["messages"] == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "user"},
+    ]
+
+    FakeOpenAI.instances = []
+    FakeOpenAI.legacy_token_parameter = False
+    with patch(
+        "src.llm_client.get_llm_config",
+        return_value={
+            "provider": "deepseek",
+            "model": "deepseek-model",
+            "api_key": "deepseek-key",
+        },
+    ), patch("openai.OpenAI", FakeOpenAI):
+        deepseek_client = LLMClient()
+        deepseek_client._get_client()
+    assert FakeOpenAI.instances[0].kwargs == {
+        "api_key": "deepseek-key",
+        "base_url": "https://api.deepseek.com",
+    }
+
+    with patch(
+        "src.llm_client.get_llm_config",
+        return_value={"provider": "unsupported", "model": "test", "api_key": "key"},
+    ):
+        try:
+            LLMClient()
+        except ValueError as exc:
+            assert "Unsupported LLM provider" in str(exc)
+        else:
+            raise AssertionError("unsupported provider should fail clearly")
 
     assert resolve_scheme("kyber") is KYBER
     assert resolve_scheme("dilithium") is DILITHIUM

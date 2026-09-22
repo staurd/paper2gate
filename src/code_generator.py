@@ -156,6 +156,7 @@ def generate_modmul(
     client: LLMClient,
     max_retries: int = 2,
     scheme: SchemeProfile | None = None,
+    target_part: str | None = None,
 ) -> GeneratedModule:
     """Generate the fixed-interface modmul from a hardware spec.
 
@@ -163,10 +164,12 @@ def generate_modmul(
         scheme: PQC scheme profile. Renders the fixed-interface constants
                 (operand widths, modulus) into the modmul prompt. Defaults
                 to KYBER for backward compatibility with direct callers.
+        target_part: Legal Vivado part to target during RTL generation.
     """
     ctx = _spec_context(module_spec)
     prompt_name = "generate_modmul.jinja"
     ctx.update(render_vars(scheme or KYBER))
+    ctx["target_part"] = target_part or ""
     user_prompt = load_prompt(prompt_name, **ctx)
 
     base_system = (
@@ -225,6 +228,7 @@ def generate_with_check(
     client: LLMClient,
     max_rounds: int = 3,
     scheme: SchemeProfile | None = None,
+    target_part: str | None = None,
 ) -> tuple[GeneratedModule, list[str]]:
     """
     Generate Verilog, then run an iverilog-check + LLM-fix loop.
@@ -232,7 +236,12 @@ def generate_with_check(
     Returns (final_module, error_logs).
     """
     console.print(f"    Generating [cyan]{module_spec.module_name}[/cyan]...")
-    module = generate_modmul(module_spec, client, scheme=scheme)
+    module = generate_modmul(
+        module_spec,
+        client,
+        scheme=scheme,
+        target_part=target_part,
+    )
     error_logs: list[str] = []
 
     for round_num in range(1, max_rounds + 1):
