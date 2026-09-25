@@ -2,6 +2,8 @@
 
 Paper2Gate extracts modular-arithmetic hardware ideas from PQC papers and generates a fixed-interface Verilog `modmul` implementation.
 
+中文项目说明见 [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md)。
+
 ## Run
 
 ```bash

@@ -1,0 +1,39 @@
+% Paper2Gate workflow algorithm.
+% Required packages: algorithm, algpseudocode, amsmath, float
+\begin{algorithm}[H]
+\caption{Paper2Gate Workflow}
+\label{alg:paper2gate}
+\begin{algorithmic}[1]
+\Require Paper $P$
+\Ensure Verified fixed-interface RTL $V$ and evidence record $\mathcal{C}$
+
+\State $E\gets\Call{ParseEvidence}{P}$
+       \Comment{Extract text and relevant figure evidence}
+\State $H\gets\Call{ExtractAndNormalize}{E}$
+       \Comment{Identify and normalize the target innovation}
+\State $V\gets\Call{GenerateRTL}{H}$
+\State $I_{\mathrm{flag}}\gets\Call{CheckInterface}{V,H}$
+\If{$I_{\mathrm{flag}}\neq\textsc{pass}$}
+    \State $V\gets\Call{InterfaceRepair}{V,H}$
+       \Comment{Retry within the structural budget}
+\EndIf
+\If{$\Call{CheckInterface}{V,H}\neq\textsc{pass}$}
+    \State \Return $V,\Call{Record}{E,H,V,\textsc{failed}}$
+\EndIf
+\State $(S_{\mathrm{flag}},V)\gets\Call{SyntaxRepair}{V,H}$
+       \Comment{Syntax-feedback loop}
+\If{$S_{\mathrm{flag}}\neq\textsc{pass}$}
+    \State \Return $V,\Call{Record}{E,H,V,S_{\mathrm{flag}}}$
+\EndIf
+\State $(F_{\mathrm{flag}},V)\gets\Call{FunctionRepair}{V,H}$
+       \Comment{Golden-model feedback loop}
+\If{$F_{\mathrm{flag}}\neq\textsc{pass}$}
+    \State \Return $V,\Call{Record}{E,H,V,F_{\mathrm{flag}}}$
+\EndIf
+\State $(R_{\mathrm{flag}},R)\gets\Call{Synthesize}{V}$
+       \Comment{Collect implementation evidence when available}
+\State $\mathcal{C}\gets\Call{TraceEvidence}{P,E,H,V,R_{\mathrm{flag}},R}$
+       \Comment{Preserve evidence and stage status}
+\State \Return $V,\mathcal{C}$
+\end{algorithmic}
+\end{algorithm}

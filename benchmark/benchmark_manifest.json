@@ -1,0 +1,447 @@
+{
+  "manifest_version": "1.0",
+  "benchmark_name": "paper2gate modular multiplication benchmark",
+  "source_directory": "test_papers",
+  "description": "人工首轮标注的 13 篇论文及其可复核元数据。该文件同时包含 manifest、标注字段定义和论文标注结果。",
+  "annotation_policy": {
+    "target_operation": "论文中可映射到统一 modmul 接口的模乘/模约减模块",
+    "output_semantics": "R = correction_factor * (A * B) mod q",
+    "latency_definition": "从有效输入 A/B 到有效输出 R 的总时钟周期；完整 NTT、PWM 或 KEM 延迟不填入该字段",
+    "evidence_page_numbering": "PDF 页码，1-based",
+    "unknown_value": null,
+    "correction_factor_note": "记录论文 reduction 原始输出的乘法因子；论文用 twiddle factor 抵消该因子时仍保留原始因子并在 notes 说明。"
+  },
+  "scheme_profiles": {
+    "kyber": {
+      "q": 3329,
+      "data_width": 12,
+      "product_width": 24
+    },
+    "dilithium": {
+      "q": 8380417,
+      "data_width": 23,
+      "product_width": 46
+    }
+  },
+  "annotation_schema": {
+    "paper_id": "唯一论文标识，例如 p001",
+    "file": "相对于仓库根目录的 PDF 路径",
+    "sha256": "PDF 文件完整 SHA-256，小写十六进制",
+    "page_count": "PDF 总页数",
+    "title": "论文标题或文件标题",
+    "scheme": "kyber 或 dilithium",
+    "parameters": {
+      "q": "模数",
+      "data_width": "输入操作数位宽",
+      "product_width": "乘积位宽"
+    },
+    "target_innovation": "与目标模乘/模约减直接相关的论文创新",
+    "reduction": {
+      "correction_factor": "整数 k，使输出语义为 R = k * (A * B) mod q",
+      "output_semantics": "便于机器验证的输出语义",
+      "description": "约减算法和其适配方式"
+    },
+    "latency": {
+      "reported_reduction_cycles": "论文明确报告的 reduction unit 周期数；未知为 null",
+      "benchmark_total_latency_cycles": "统一 benchmark 接口下的总周期数；无法由论文明确确认时为 null",
+      "evidence": "延迟证据及其是否为推导值"
+    },
+    "fpga_device": "论文自身实验所用 FPGA；不作为统一 benchmark 的综合器件",
+    "evidence": "关键断言对应的 PDF 页码和说明",
+    "paper_reported_results": "论文报告的完整设计资源/频率等上下文，不等同于 modmul 资源",
+    "unknown_fields": "明确未知或不能可靠确认的字段路径",
+    "annotation_status": "annotated 表示已完成首轮人工标注"
+  },
+  "papers": [
+    {
+      "paper_id": "p001",
+      "file": "test_papers/A Compact and High-Performance Hardware.pdf",
+      "sha256": "6a78f67b30d321dd4ff4085badaff80d3b74689926f75667859cd7240eab73fe",
+      "page_count": 26,
+      "title": "A Compact and High-Performance Hardware",
+      "scheme": "dilithium",
+      "parameters": {"q": 8380417, "data_width": 23, "product_width": 46},
+      "target_innovation": "基于 CSD 和 2^23 = 2^13 - 1 mod q 的定制模约减模块",
+      "reduction": {
+        "correction_factor": 1,
+        "output_semantics": "R = 1 * (A * B) mod 8380417",
+        "description": "CSD 常数乘法结合 Dilithium 特定模数的定制约减。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "未明确给出统一 modmul 输入到输出的总延迟。"
+      },
+      "fpga_device": "XC7Z020",
+      "evidence": [
+        {"pages": [3], "claim": "给出 Dilithium 模数 q = 8380417。"},
+        {"pages": [18], "claim": "Section 4.5 描述基于 CSD 和模数关系的模约减；同页给出 XC7Z020。"}
+      ],
+      "paper_reported_results": {
+        "lut": 29998,
+        "ff": 10366,
+        "bram": 11,
+        "dsp": 10,
+        "frequency_mhz": 96.9
+      },
+      "unknown_fields": ["latency.reported_reduction_cycles", "latency.benchmark_total_latency_cycles"],
+      "annotation_status": "annotated",
+      "notes": "完整设计资源仅作为论文上下文，不作为单独 modmul 资源。"
+    },
+    {
+      "paper_id": "p002",
+      "file": "test_papers/A Compact Hardware Implementation of CCA-Secure Key Exchange Mechanism CRYSTALS-KYBER on FPGA.pdf",
+      "sha256": "9d7e40bc7694c6d08f95cc94981c23064c25c727410631c2374074f8017f1139",
+      "page_count": 29,
+      "title": "A Compact Hardware Implementation of CCA-Secure Key Exchange Mechanism CRYSTALS-KYBER on FPGA",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "Modified Barrett Reduction（Algorithm 4）",
+      "reduction": {
+        "correction_factor": 1,
+        "output_semantics": "R = 1 * (A * B) mod 3329",
+        "description": "针对 Kyber 的 modified Barrett reduction。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "Algorithm 4 描述算法，但未明确统一 modmul 总周期。"
+      },
+      "fpga_device": "XC7A12TCPG238-1",
+      "evidence": [
+        {"pages": [10, 11], "claim": "Algorithm 4 及相关文字给出 modified Barrett reduction。"},
+        {"pages": [18], "claim": "给出实验 FPGA XC7A12TCPG238-1。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.reported_reduction_cycles", "latency.benchmark_total_latency_cycles"],
+      "annotation_status": "annotated",
+      "notes": "论文是 Kyber 完整实现；完整 KEM 延迟不作为 modmul 延迟。"
+    },
+    {
+      "paper_id": "p003",
+      "file": "test_papers/A Hard Crystal- Implementing Dilithium on Reconfigurable Hardware.pdf",
+      "sha256": "a7ada56cc9c73925a67741f10a1b2767ff6bd58d5cd7376599458c550fb1406f",
+      "page_count": 20,
+      "title": "A Hard Crystal: Implementing Dilithium on Reconfigurable Hardware",
+      "scheme": "dilithium",
+      "parameters": {"q": 8380417, "data_width": 23, "product_width": 46},
+      "target_innovation": "递归利用 2^23 ≡ 2^13 - 1 mod q 的模约减",
+      "reduction": {
+        "correction_factor": 1,
+        "output_semantics": "R = 1 * (A * B) mod 8380417",
+        "description": "利用 Dilithium 模数特殊关系递归分解并约减高位。"
+      },
+      "latency": {
+        "reported_reduction_cycles": 4,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "文中提到 reduction DSP 的 4-cycle pipeline，但未明确统一 modmul 输入到输出总延迟。"
+      },
+      "fpga_device": "XC7A100T",
+      "evidence": [
+        {"pages": [12, 13], "claim": "描述 2^23 ≡ 2^13 - 1 mod q 的递归模约减。"},
+        {"pages": [9], "claim": "给出实验 FPGA XC7A100T。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.benchmark_total_latency_cycles"],
+      "annotation_status": "annotated",
+      "notes": "4 cycles 仅标为 reduction DSP pipeline 证据，不冒充统一接口总延迟。"
+    },
+    {
+      "paper_id": "p004",
+      "file": "test_papers/A Hardware Accelerator for Polynomial Multiplication Operation of CRYSTALS-KYBER PQC Scheme.pdf",
+      "sha256": "28442b150b47ef78b206d40b3e92f6af48c048c527e4211644eb45764750b1ae",
+      "page_count": 6,
+      "title": "A Hardware Accelerator for Polynomial Multiplication Operation of CRYSTALS-KYBER PQC Scheme",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "基于 2^12 ≡ 3·2^8 - 1 mod 3329 和 Dadda tree 的 bitwise modular reduction",
+      "reduction": {
+        "correction_factor": 1,
+        "output_semantics": "R = 1 * (A * B) mod 3329",
+        "description": "Dadda tree 乘积后使用 Kyber 特定常数关系进行 bitwise reduction。"
+      },
+      "latency": {
+        "reported_reduction_cycles": 1,
+        "benchmark_total_latency_cycles": 2,
+        "evidence": "论文明确 reduction unit 为 1 clock，DSP product 也为 1-cycle latency；2 cycles 按固定 product register 加 reduction stage 计。"
+      },
+      "fpga_device": "Xilinx Artix-7",
+      "evidence": [
+        {"pages": [3, 4], "claim": "给出模数关系、Dadda tree 和 bitwise modular reduction。"},
+        {"pages": [4], "claim": "reduction unit 和 DSP product 的单周期描述。"}
+      ],
+      "paper_reported_results": {
+        "lut_approx": 7900,
+        "ff_approx": 3600,
+        "dsp": 4,
+        "bram": 16,
+        "frequency_mhz": 159
+      },
+      "unknown_fields": [],
+      "annotation_status": "annotated",
+      "notes": "FPGA 未给出更完整 part number。"
+    },
+    {
+      "paper_id": "p005",
+      "file": "test_papers/A High-Efficiency Modular Multiplication Digital Signal.pdf",
+      "sha256": "2e0eb23df6d8c43ba7ca653d6bf5eaa357cf8ee749b31427a5d1c63f229009a5",
+      "page_count": 17,
+      "title": "A High-Efficiency Modular Multiplication Digital Signal",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "Kyber-DSP / K-RED modular multiplier",
+      "reduction": {
+        "correction_factor": 13,
+        "output_semantics": "R = 13 * (A * B) mod 3329",
+        "description": "K-RED 原始输出为 13·C mod q；butterfly 中通过 k^-1 twiddle factor 抵消该因子。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "未明确给出独立 modmul 总周期。"
+      },
+      "fpga_device": "XC7A100TFGG676-3",
+      "evidence": [
+        {"pages": [2], "claim": "介绍 Kyber-DSP/K-RED 目标。"},
+        {"pages": [7, 8, 9], "claim": "描述 K-RED 约减及原始输出因子 13。"},
+        {"pages": [12], "claim": "给出实验 FPGA XC7A100TFGG676-3。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.reported_reduction_cycles", "latency.benchmark_total_latency_cycles"],
+      "annotation_status": "annotated",
+      "notes": "记录 reduction 的原始因子 13，而不是 twiddle 抵消后的最终 butterfly 语义。"
+    },
+    {
+      "paper_id": "p006",
+      "file": "test_papers/A_Better_Kyber_Butterfly_for_FPGAs.pdf",
+      "sha256": "96d1ad2dffdf0789e46ae71f877737af26bee0f528a92299bf1f14a5141f9a44",
+      "page_count": 7,
+      "title": "A Better Kyber Butterfly for FPGAs",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "LUT-6 + K-reduction 的新模约减",
+      "reduction": {
+        "correction_factor": 13,
+        "output_semantics": "R = 13 * (A * B) mod 3329",
+        "description": "Algorithm 3 明确 r = a*b*k mod q，其中 k-reduction 的 k 为 13。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "未明确给出独立 modmul 总周期。"
+      },
+      "fpga_device": "xc7a200tffg1156-3",
+      "evidence": [
+        {"pages": [2, 3, 4, 5], "claim": "介绍 LUT-6、K-reduction 和 Algorithm 3 的输出语义。"},
+        {"pages": [6], "claim": "给出实验 FPGA xc7a200tffg1156-3。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.reported_reduction_cycles", "latency.benchmark_total_latency_cycles"],
+      "annotation_status": "annotated",
+      "notes": "Algorithm 3 的 k 因子保留为 correction_factor。"
+    },
+    {
+      "paper_id": "p007",
+      "file": "test_papers/An_Efficient_Implementation_of_KYBER.pdf",
+      "sha256": "d3a3ea05648ec7a2e0c944c2367c45b1f4e5c4e2df04edf6dbed08a28d18cd01",
+      "page_count": 5,
+      "title": "An Efficient Implementation of KYBER",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "基于 2^12 ≡ 3·2^8 - 1 mod 3329 的 bitwise modular reduction",
+      "reduction": {
+        "correction_factor": 1,
+        "output_semantics": "R = 1 * (A * B) mod 3329",
+        "description": "利用 Kyber 模数特殊关系实现 bitwise modular reduction。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "未明确给出统一 modmul 总周期。"
+      },
+      "fpga_device": "Xilinx Artix-7",
+      "evidence": [
+        {"pages": [2, 3], "claim": "给出模数关系和 bitwise modular reduction。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.reported_reduction_cycles", "latency.benchmark_total_latency_cycles", "fpga_device.part_number"],
+      "annotation_status": "annotated",
+      "notes": "论文仅明确 Xilinx Artix-7 系列，未给出完整 part number。"
+    },
+    {
+      "paper_id": "p008",
+      "file": "test_papers/Compact_Instruction_Set_Extensions_for_Kyber.pdf",
+      "sha256": "5cea5ca295499f6b389fb4d5925e6b4ba89138c4ca2fed76f6e343e0c375565d",
+      "page_count": 5,
+      "title": "Compact Instruction Set Extensions for Kyber",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "optimized k2-reduction",
+      "reduction": {
+        "correction_factor": 2704,
+        "output_semantics": "R = 2704 * (A * B) mod 3329",
+        "description": "Algorithm 1 使用 k0 = -13、k1 = -208；原始输出因子为 k0*k1 = 2704。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "butterfly unit 明确为 5-stage pipeline，但独立 modmul 总延迟未单独确认。"
+      },
+      "fpga_device": "Artix-7 35T",
+      "evidence": [
+        {"pages": [2], "claim": "介绍 optimized k2-reduction 和 Algorithm 1 的 k0/k1 常数。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.benchmark_total_latency_cycles", "fpga_device.part_number"],
+      "annotation_status": "annotated",
+      "notes": "5-stage 是 butterfly unit pipeline 证据，不等同于独立 modmul 总延迟；2704 按算法原始乘法因子记录。"
+    },
+    {
+      "paper_id": "p009",
+      "file": "test_papers/Efficient Accelerator for NTT-based Polynomial Multiplication.pdf",
+      "sha256": "b1d5e3db88e149f04146d2d405b0f89fef08a75f8f6f17a516d8624178d96229",
+      "page_count": 9,
+      "title": "Efficient Accelerator for NTT-based Polynomial Multiplication",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "precomputation + K-RED 的 CT butterfly",
+      "reduction": {
+        "correction_factor": 13,
+        "output_semantics": "R = 13 * (A * B) mod 3329",
+        "description": "K-RED 原始输出为 13·C mod q；预计算中使用 k^-1 twiddle factor 抵消。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "论文报告的 251 cycles 是完整 NTT pipeline latency，不填入独立 modmul latency。"
+      },
+      "fpga_device": "Xilinx Artix-7 FPGA chip",
+      "evidence": [
+        {"pages": [3, 4, 5], "claim": "描述 precomputation、K-RED 和 CT butterfly。"}
+      ],
+      "paper_reported_results": {"ntt_pipeline_latency_cycles": 251},
+      "unknown_fields": ["latency.reported_reduction_cycles", "latency.benchmark_total_latency_cycles", "fpga_device.part_number"],
+      "annotation_status": "annotated",
+      "notes": "251 cycles 保留为完整 NTT 上下文，不作为单次模乘延迟。"
+    },
+    {
+      "paper_id": "p010",
+      "file": "test_papers/Efficient_Modular_Polynomial_Multiplier_for_NTT_Accelerator_of_Crystals-Kyber.pdf",
+      "sha256": "ac274421f8ad6f46075941424ab01ddef289fa9878c809f445d76b64c6f08c5b",
+      "page_count": 6,
+      "title": "Efficient Modular Polynomial Multiplier for NTT Accelerator of Crystals-Kyber",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "结合中间结果 sign bit、LUT 和 correction 的 hybrid K2-RED",
+      "reduction": {
+        "correction_factor": 1,
+        "output_semantics": "R = 1 * (A * B) mod 3329",
+        "description": "hybrid K2-RED 对中间结果进行符号判断、查表和 correction，最终输出落入 [0, 3328]。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "butterfly unit 为 5 pipeline stages，但独立 modmul 总延迟未单独确认。"
+      },
+      "fpga_device": "XC7A100TFGG676-3",
+      "evidence": [
+        {"pages": [3, 4], "claim": "描述 hybrid K2-RED、sign bit、LUT 和 correction。"},
+        {"pages": [5], "claim": "给出实验 FPGA XC7A100TFGG676-3。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.benchmark_total_latency_cycles"],
+      "annotation_status": "annotated",
+      "notes": "5-stage pipeline 是 butterfly unit 证据，不强行转换成独立 modmul 总延迟。"
+    },
+    {
+      "paper_id": "p011",
+      "file": "test_papers/High-Speed_NTT-based_Polynomial_Multiplication_Accelerator_for_Post-Quantum_Cryptography.pdf",
+      "sha256": "16aefa4a0a1faf463da624ffafaf3914432988f48491cdb4d3220df5526022df",
+      "page_count": 8,
+      "title": "High-Speed NTT-based Polynomial Multiplication Accelerator for Post-Quantum Cryptography",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "K2-RED",
+      "reduction": {
+        "correction_factor": 169,
+        "output_semantics": "R = 169 * (A * B) mod 3329",
+        "description": "Algorithm 1 输出 C'' = k^2*C mod q，k = 13，因此原始 correction factor 为 169；NTT 中用预计算 twiddle factor 抵消。"
+      },
+      "latency": {
+        "reported_reduction_cycles": null,
+        "benchmark_total_latency_cycles": null,
+        "evidence": "未明确给出独立 modmul 总周期。"
+      },
+      "fpga_device": "XC7A100T-3",
+      "evidence": [
+        {"pages": [3, 4], "claim": "介绍 K2-RED 和 Algorithm 1 的 k^2 输出语义。"},
+        {"pages": [5], "claim": "给出实验 FPGA XC7A100T-3。"}
+      ],
+      "paper_reported_results": {},
+      "unknown_fields": ["latency.reported_reduction_cycles", "latency.benchmark_total_latency_cycles"],
+      "annotation_status": "annotated",
+      "notes": "记录 K2-RED 原始 k^2 因子 169；预计算 twiddle 的抵消不改变标注语义。"
+    },
+    {
+      "paper_id": "p012",
+      "file": "test_papers/Towards_Efficient_Hardware_Implementation_of_NTT_for_Kyber_on_FPGAs.pdf",
+      "sha256": "eec7be99fc4739cb0e42864abb6e19c4c8592af7bf5701547a093df8230a8225",
+      "page_count": 5,
+      "title": "Towards Efficient Hardware Implementation of NTT for Kyber on FPGAs",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "基于多个 LUT 和 modular adder 的 fast modular multiplier",
+      "reduction": {
+        "correction_factor": 1,
+        "output_semantics": "R = 1 * (A * B) mod 3329",
+        "description": "多个 LUT 与 modular adder 组成 fast modular multiplier，最终输出普通 p mod q。"
+      },
+      "latency": {
+        "reported_reduction_cycles": 5,
+        "benchmark_total_latency_cycles": 5,
+        "evidence": "BAU 明确为 5-stage pipeline；490 cycles 是完整 NTT，不填入 modmul latency。"
+      },
+      "fpga_device": "XC7A35TFTG256-1",
+      "evidence": [
+        {"pages": [2, 3], "claim": "描述 LUT、modular adder 和 fast modular multiplier。"},
+        {"pages": [4], "claim": "给出 BAU 的 5-stage pipeline 和 FPGA XC7A35TFTG256-1。"}
+      ],
+      "paper_reported_results": {"ntt_latency_cycles": 490},
+      "unknown_fields": [],
+      "annotation_status": "annotated",
+      "notes": "490 cycles 仅作为完整 NTT 上下文。"
+    },
+    {
+      "paper_id": "p013",
+      "file": "test_papers/Towards_Lightweight_Kyber_in_FPGAs_a_BRAM_Free_Iterative_NTT.pdf",
+      "sha256": "93cad831417b3402c3f8d241bf98515300c459b958adc081816201fd60e7d01c",
+      "page_count": 6,
+      "title": "Towards a Lightweight Kyber in FPGAs: a BRAM-Free Iterative NTT",
+      "scheme": "kyber",
+      "parameters": {"q": 3329, "data_width": 12, "product_width": 24},
+      "target_innovation": "LUT + K-RED modular reduction",
+      "reduction": {
+        "correction_factor": -13,
+        "output_semantics": "R = -13 * (A * B) mod 3329",
+        "description": "Algorithm 1 明确 C' = -k*C mod q，k = 13。"
+      },
+      "latency": {
+        "reported_reduction_cycles": 2,
+        "benchmark_total_latency_cycles": 3,
+        "evidence": "reduction 本身明确需要 2 cycles；3 cycles 按统一接口计入固定 product register。"
+      },
+      "fpga_device": "XC7A200",
+      "evidence": [
+        {"pages": [3], "claim": "介绍 LUT + K-RED，Algorithm 1 给出 C' = -k*C mod q。"},
+        {"pages": [5], "claim": "给出实验 FPGA XC7A200。"}
+      ],
+      "paper_reported_results": {
+        "ntt_latency_cycles": 456,
+        "pwm_latency_cycles": 265
+      },
+      "unknown_fields": [],
+      "annotation_status": "annotated",
+      "notes": "456/265 cycles 是完整 NTT/PWM 延迟，不是单次模乘；benchmark 总延迟 3 包含固定 product register。"
+    }
+  ]
+}
