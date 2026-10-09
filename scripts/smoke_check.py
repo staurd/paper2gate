@@ -20,6 +20,7 @@ from src.code_generator import _fix_from_iverilog, fix_from_verification, genera
 from src.figure_analysis import analyze_figure_pages, classify_figure_captions  # noqa: E402
 from src.innovation_extractor import (  # noqa: E402
     _parse_analysis,
+    SCHEME_CONTEXT_CHARS,
     classify_scheme,
     extract_innovations,
 )
@@ -511,7 +512,7 @@ def main() -> None:
             prompt = client_class.return_value.generate_structured.call_args.kwargs["user_prompt"]
             assert client_class.return_value.generate_structured.call_args.kwargs["stage"] == "extract"
             assert client_class.return_value.generate_structured.call_args.kwargs["operation"] == "classify_scheme"
-            assert prompt.split("Paper excerpt:\n", 1)[1].strip() == body[:2000].strip()
+            assert prompt.split("Paper excerpt:\n", 1)[1].strip() == body[:SCHEME_CONTEXT_CHARS].strip()
             assert "LATE_BODY_MARKER" not in prompt
             assert (output_dir / "extracted_text" / "full_text.txt").read_text(encoding="utf-8") == raw_text
             assert extract.call_args.args[0].strip() == body.strip()

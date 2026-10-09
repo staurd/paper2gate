@@ -22,3 +22,6 @@ vivado_*.jou
 vivado_*.log
 *.backup.jou
 *.backup.log
+
+paper_draft/
+tmp/

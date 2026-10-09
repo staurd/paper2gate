@@ -17,7 +17,7 @@ from src.schemes import KYBER, SchemeProfile, render_vars
 # live in the experimental-setup section near the END of the paper, so a tight
 # budget silently starves the model of exactly what it was asked for.
 DEFAULT_MAX_CHARS = 100000
-SCHEME_CONTEXT_CHARS = 2000
+SCHEME_CONTEXT_CHARS = 3000
 
 _REFERENCES_RE = re.compile(r"^\s*(?:\d+\.?\s*)?(references|bibliography)\s*$", re.M | re.I)
 

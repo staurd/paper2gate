@@ -1,0 +1,14 @@
+paper_id,specification,scheme_correct,target_correct,correction_factor_correct,total_latency_correct,device_verbatim_correct,device_semantic_correct,unknown_total_latency_retained,unsupported_total_latency_fill,unknown_fpga_part_retained,unsupported_fpga_part_fill,strict_pass
+p001,1,1,1,1,NA,1,1,0,1,NA,NA,0
+p002,1,1,1,1,NA,1,1,0,1,NA,NA,0
+p003,1,1,1,1,NA,1,1,0,1,NA,NA,0
+p004,1,1,1,1,0,0,0,NA,NA,NA,NA,0
+p005,1,1,1,1,NA,0,1,0,1,NA,NA,0
+p006,1,1,1,1,NA,1,1,0,1,NA,NA,0
+p007,1,1,1,1,NA,0,1,0,1,1,0,0
+p008,1,1,1,1,NA,1,1,0,1,1,0,0
+p009,1,1,1,1,NA,0,1,0,1,1,0,0
+p010,1,1,1,0,NA,1,1,0,1,NA,NA,0
+p011,1,1,1,1,NA,0,1,0,1,NA,NA,0
+p012,1,1,1,1,0,1,1,NA,NA,NA,NA,0
+p013,1,1,1,1,0,0,1,NA,NA,NA,NA,0
